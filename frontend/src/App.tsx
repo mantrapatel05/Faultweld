@@ -9,7 +9,7 @@ function App() {
   return (
     <main className="app-shell">
       <section className="intro" aria-labelledby="page-title">
-        <p className="eyebrow">Agentic SRE Trust Lab</p>
+        <p className="eyebrow">Faultweld</p>
         <h1 id="page-title">Foundation scaffold</h1>
         <p className="lede">
           The local application layout is ready. Incident workflows and remediation features will be added

@@ -1,6 +1,6 @@
-# Agentic SRE Trust Lab
+# Faultweld
 
-Foundation scaffold for the local Agentic SRE Trust Lab. This repository currently contains the independently buildable `backend/` and `frontend/` projects only; incident workflows, model calls, Kubernetes integration, and remediation behavior are intentionally not implemented yet.
+Foundation scaffold for the local Faultweld project. This repository currently contains the independently buildable `backend/` and `frontend/` projects only; incident workflows, model calls, Kubernetes integration, and remediation behavior are intentionally not implemented yet.
 
 ## Prerequisites
 
