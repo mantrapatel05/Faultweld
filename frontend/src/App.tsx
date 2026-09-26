@@ -207,17 +207,23 @@ function OverviewPage() {
 
       <section className="principles-grid" aria-label="Faultweld operating principles">
         <article className="principle-block">
-          <span className="principle-index">A</span>
+          <span className="principle-index" aria-hidden="true">
+            A
+          </span>
           <h2>Evidence before claims</h2>
           <p>Model explanations will never be rendered as verified system state.</p>
         </article>
         <article className="principle-block">
-          <span className="principle-index">B</span>
+          <span className="principle-index" aria-hidden="true">
+            B
+          </span>
           <h2>Authority stays narrow</h2>
           <p>Approval and execution controls will appear only when the API can support them.</p>
         </article>
         <article className="principle-block">
-          <span className="principle-index">C</span>
+          <span className="principle-index" aria-hidden="true">
+            C
+          </span>
           <h2>Unknown stays visible</h2>
           <p>Disconnected and indeterminate states are never collapsed into a success signal.</p>
         </article>

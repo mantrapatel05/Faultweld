@@ -40,13 +40,27 @@ npm --prefix frontend run build
 ## Checks
 
 ```powershell
-.\.venv\Scripts\python -m ruff check backend
-.\.venv\Scripts\python -m mypy backend
+.\.venv\Scripts\python -m ruff check backend frontend\tests scripts
+.\.venv\Scripts\python -m mypy --config-file backend\pyproject.toml backend\app backend\tests
+.\.venv\Scripts\python -m mypy --strict frontend\tests\browser\console_smoke.py
+.\.venv\Scripts\python -m unittest discover -s backend\tests -t backend -p "test_*.py"
 npm --prefix frontend run typecheck
 npm --prefix frontend run lint
+npm --prefix frontend run test
 npm --prefix frontend run build
-python scripts\check_hygiene.py
+.\.venv\Scripts\python scripts\check_hygiene.py
 ```
+
+The frontend has two test layers. `npm --prefix frontend run test` runs the deterministic component suite (Vitest with jsdom) against the real application shell. The browser smoke suite drives a real Chromium instance against the Vite dev server and needs the browser binary once per machine:
+
+```powershell
+.\.venv\Scripts\python -m playwright install chromium
+python .agents\skills\webapp-testing\scripts\with_server.py --server "npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173" --port 5173 -- .\.venv\Scripts\python.exe frontend\tests\browser\console_smoke.py
+```
+
+On Windows the helper stops the `npm` wrapper but can leave the `vite` child process running, which then holds files under `frontend\node_modules`. Stop any leftover `node` process before running `npm ci` again.
+
+Both layers stub every API response, so neither needs a model provider, a database, or a Kubernetes cluster, and the backend is not required to run them. In CI the component suite runs in the `Frontend checks` job and the browser suite in the separate `Browser smoke and accessibility checks` job, so frontend failures never mask or depend on backend results.
 
 To regenerate the backend lockfile after an intentional dependency update:
 

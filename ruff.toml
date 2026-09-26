@@ -1,0 +1,8 @@
+# Ruff settings for Python that lives outside backend/.
+# backend/ keeps its own configuration in backend/pyproject.toml, which takes
+# precedence for files inside that directory.
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
