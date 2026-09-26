@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+    faultweld.dev/managed: "true"

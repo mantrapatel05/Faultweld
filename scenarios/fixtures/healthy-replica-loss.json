@@ -1,0 +1,14 @@
+{
+  "schema_version": "0.2",
+  "scenario_id": "healthy-replica-loss",
+  "version": "1",
+  "title": "Sample service has no available replicas",
+  "environment_id": "kind-faultweld",
+  "namespace": "faultweld-demo",
+  "target_deployment": "faultweld-sample",
+  "initial_replicas": 1,
+  "fault": {"kind": "scale", "replicas": 0},
+  "alert": {"alert_id": "alert-replica-loss", "summary": "faultweld-sample has no available replicas"},
+  "health": {"healthy_replicas": 1, "faulted_replicas": 0},
+  "cleanup": {"replicas": 1}
+}

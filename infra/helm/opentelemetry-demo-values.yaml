@@ -1,0 +1,9 @@
+components:
+  agent:
+    enabled: false
+  chatbot:
+    enabled: false
+  load-generator:
+    enabled: false
+  mcp:
+    enabled: false

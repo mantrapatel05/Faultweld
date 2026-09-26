@@ -1,0 +1,132 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: faultweld-scenario-controller
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: faultweld-agent-readonly
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: faultweld-sample
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: faultweld-scenario-controller
+  namespace: faultweld-demo
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: faultweld-scenario-controller
+  namespace: faultweld-demo
+subjects:
+  - kind: ServiceAccount
+    name: faultweld-scenario-controller
+    namespace: faultweld-demo
+roleRef:
+  kind: Role
+  name: faultweld-scenario-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: faultweld-agent-readonly
+  namespace: faultweld-demo
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: faultweld-agent-readonly
+  namespace: faultweld-demo
+subjects:
+  - kind: ServiceAccount
+    name: faultweld-agent-readonly
+    namespace: faultweld-demo
+roleRef:
+  kind: Role
+  name: faultweld-agent-readonly
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faultweld-sample
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/name: faultweld-sample
+    app.kubernetes.io/part-of: faultweld
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: faultweld-sample
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: faultweld-sample
+    spec:
+      serviceAccountName: faultweld-sample
+      containers:
+        - name: http
+          image: hashicorp/http-echo:1.0.0
+          args: ["-text=ok"]
+          ports:
+            - name: http
+              containerPort: 5678
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: faultweld-sample
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+spec:
+  selector:
+    app.kubernetes.io/name: faultweld-sample
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

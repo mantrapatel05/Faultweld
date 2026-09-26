@@ -22,7 +22,7 @@ The checked-in lockfiles are the source for reproducible dependency installation
 
 ## Development
 
-The single documented developer entrypoint starts both projects:
+The single documented developer entrypoint starts both application projects:
 
 ```powershell
 python scripts\dev.py
@@ -36,6 +36,34 @@ The projects can also be built independently:
 .\.venv\Scripts\python -m uvicorn app.main:app --app-dir backend
 npm --prefix frontend run build
 ```
+
+## Disposable cluster
+
+v0.2.1 adds an optional local kind cluster for the OpenTelemetry Demo and a
+small fault-injection target. Install Docker Desktop (using Linux containers),
+`kind`, `kubectl`, and Helm 3 or newer, then run these commands from the
+repository root:
+
+```powershell
+.\.venv\Scripts\python scripts\cluster.py setup
+.\.venv\Scripts\python scripts\cluster.py reset
+.\.venv\Scripts\python scripts\cluster.py teardown
+```
+
+Setup creates the pinned `faultweld` kind cluster, the managed `faultweld-demo`
+namespace, and installs OpenTelemetry Demo Helm chart `0.42.0` (application
+`3.1.0`). The [official chart guide](https://opentelemetry.io/docs/platforms/kubernetes/helm/demo/)
+estimates around 4 GB of memory for its default installation; allow additional
+memory for Docker and the kind nodes. First setup can take a while because the
+demo pulls many container images. The setup makes the kind control-plane schedulable so
+the demo can spread across both nodes. Its demo-only agent, chatbot, MCP, and
+load-generator components are disabled to keep this milestone focused on
+observable services. A pinned `hashicorp/http-echo:1.0.0`
+deployment named `faultweld-sample` remains the small, deterministic target for
+the later scenario fixtures. Teardown refuses to run unless the active
+kubeconfig context is exactly `kind-faultweld` and the namespace has the
+`faultweld.dev/managed=true` label; it uninstalls the Helm release, then removes
+the namespace and cluster.
 
 ## Checks
 

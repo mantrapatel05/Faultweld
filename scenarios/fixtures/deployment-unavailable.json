@@ -1,0 +1,14 @@
+{
+  "schema_version": "0.2",
+  "scenario_id": "deployment-unavailable",
+  "version": "1",
+  "title": "Sample service deployment is unavailable",
+  "environment_id": "kind-faultweld",
+  "namespace": "faultweld-demo",
+  "target_deployment": "faultweld-sample",
+  "initial_replicas": 1,
+  "fault": {"kind": "delete_pod", "selector": "app.kubernetes.io/name=faultweld-sample"},
+  "alert": {"alert_id": "alert-deployment", "summary": "faultweld-sample deployment is unavailable"},
+  "health": {"healthy_replicas": 1, "faulted_replicas": 0},
+  "cleanup": {"replicas": 1}
+}
