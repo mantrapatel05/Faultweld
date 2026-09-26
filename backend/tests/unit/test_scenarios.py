@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase
-from unittest.mock import patch
 
 from pydantic import ValidationError
 
@@ -17,7 +17,10 @@ FIXTURES = ROOT / "scenarios" / "fixtures"
 class ScenarioContractTests(TestCase):
     def test_all_initial_fixtures_are_versioned_and_distinct(self) -> None:
         scenarios = load_scenarios(FIXTURES)
-        self.assertEqual(set(scenarios), {"deployment-unavailable", "healthy-replica-loss", "readiness-regression"})
+        self.assertEqual(
+            set(scenarios),
+            {"deployment-unavailable", "healthy-replica-loss", "readiness-regression"},
+        )
         self.assertTrue(all(item.schema_version == "0.2" for item in scenarios.values()))
         self.assertTrue(all(item.namespace == "faultweld-demo" for item in scenarios.values()))
 
@@ -43,11 +46,12 @@ class ScenarioContractTests(TestCase):
         for scenario in scenarios.values():
             self.assertNotIn("expected_outcome", scenario.model_dump())
 
-    @patch("app.scenarios.registry.FIXTURES_DIR")
-    def test_duplicate_scenario_ids_are_rejected(self, fixtures_dir: object) -> None:
-        del fixtures_dir
+    def test_duplicate_scenario_ids_are_rejected(self) -> None:
         first = json.loads((FIXTURES / "healthy-replica-loss.json").read_text(encoding="utf-8"))
         second = {**first, "fault": {"kind": "scale", "replicas": 0}}
-        with self.assertRaises(ValueError):
-            definitions = [ScenarioDefinition.model_validate(first), ScenarioDefinition.model_validate(second)]
-            self.assertEqual(len({item.scenario_id for item in definitions}), len(definitions))
+        with TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            (directory / "first.json").write_text(json.dumps(first), encoding="utf-8")
+            (directory / "second.json").write_text(json.dumps(second), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "duplicate scenario ID"):
+                load_scenarios(directory)
