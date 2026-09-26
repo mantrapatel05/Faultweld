@@ -31,6 +31,8 @@ jobs:
         run: python -m mypy app
       - name: Domain schema tests
         run: python -m unittest discover -s tests -p "test_*.py"
+      - name: Frontend API types are generated from OpenAPI
+        run: python ../scripts/generate_api_types.py --check
 
   frontend:
     name: Frontend checks

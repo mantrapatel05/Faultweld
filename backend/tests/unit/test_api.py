@@ -53,6 +53,39 @@ class ApiContractTests(TestCase):
         self.assertEqual(response.json()["code"], "request_validation_error")
         self.assertEqual(response.json()["instance"], "/api/incidents")
 
+    def test_not_found_problem_details_are_stable(self) -> None:
+        response = self.client.get("/api/incidents/missing")
+
+        self.assertEqual(response.headers["content-type"], "application/problem+json")
+        self.assertEqual(
+            response.json(),
+            {
+                "type": "urn:faultweld:problem:not-found",
+                "title": "Incident not found",
+                "status": 404,
+                "detail": "The requested incident does not exist in the local read-only store.",
+                "instance": "/api/incidents/missing",
+                "code": "incident_not_found",
+            },
+        )
+
+    def test_method_not_allowed_problem_details_are_stable(self) -> None:
+        response = self.client.post("/api/incidents")
+
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.headers["content-type"], "application/problem+json")
+        self.assertEqual(
+            response.json(),
+            {
+                "type": "urn:faultweld:problem:method-not-allowed",
+                "title": "Method not allowed",
+                "status": 405,
+                "detail": "The requested method is not allowed for this resource.",
+                "instance": "/api/incidents",
+                "code": "method_not_allowed",
+            },
+        )
+
     def test_openapi_contains_read_only_paths(self) -> None:
         response = self.client.get("/openapi.json")
         self.assertEqual(response.status_code, 200)
@@ -62,6 +95,14 @@ class ApiContractTests(TestCase):
         self.assertIn("/health/ready", schema["paths"])
         self.assertIn("/api/incidents", schema["paths"])
         self.assertIn("/api/incidents/{incident_id}", schema["paths"])
+        self.assertEqual(
+            set(schema["components"]["schemas"]["ProblemDetails"]["properties"]),
+            {"type", "title", "status", "detail", "instance", "code"},
+        )
+        self.assertEqual(
+            schema["components"]["schemas"]["IncidentSummary"]["required"],
+            ["incident_id", "scenario_id", "status", "opened_at", "updated_at"],
+        )
         for operations in schema["paths"].values():
             for method in operations:
                 self.assertNotIn(method, {"post", "put", "patch", "delete"})

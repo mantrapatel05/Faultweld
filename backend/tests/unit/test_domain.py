@@ -300,6 +300,82 @@ class DomainSchemaTests(TestCase):
         with self.assertRaises(ValidationError):
             VerificationResult.model_validate(payload)
 
+    def test_verification_statuses_require_matching_check_results(self) -> None:
+        base_payload = {
+            "schema_version": "0.1",
+            "verification_id": "verification-1",
+            "incident_id": "incident-1",
+            "attempt_id": "attempt-1",
+            "checks": [
+                {
+                    "schema_version": "0.1",
+                    "check_id": "service-health",
+                    "source": "probe",
+                    "observed_at": OBSERVED_AT,
+                    "passed": None,
+                }
+            ],
+            "observed_at": OBSERVED_AT,
+        }
+
+        for status in (VerificationStatus.RECOVERED, VerificationStatus.NOT_RECOVERED):
+            with self.subTest(status=status):
+                with self.assertRaises(ValidationError):
+                    VerificationResult.model_validate({**base_payload, "status": status})
+
+        unknown = VerificationResult.model_validate(
+            {**base_payload, "status": VerificationStatus.UNKNOWN}
+        )
+        self.assertEqual(unknown.status, VerificationStatus.UNKNOWN)
+
+    def test_expiry_and_operation_windows_cannot_run_backwards(self) -> None:
+        with self.assertRaises(ValidationError):
+            Approval(
+                schema_version="0.1",
+                approval_id="approval-1",
+                proposal_id="proposal-1",
+                proposal_digest=DIGEST,
+                approver_principal_id="human-1",
+                approver_role="reviewer",
+                decision=ApprovalDecision.APPROVE,
+                decided_at=OBSERVED_AT,
+                expires_at=OBSERVED_AT,
+                policy_version="policy-1",
+                state_fingerprint=DIGEST,
+            )
+
+        with self.assertRaises(ValidationError):
+            ActionAttempt(
+                schema_version="0.1",
+                attempt_id="attempt-1",
+                proposal_id="proposal-1",
+                idempotency_key="attempt-key-1",
+                attempt_number=1,
+                preflight=ActionPreflightSnapshot(
+                    schema_version="0.1",
+                    target=resource(),
+                    state_fingerprint=DIGEST,
+                    observed_at=OBSERVED_AT,
+                    proposal_digest=DIGEST,
+                ),
+                authorization_decision_id="decision-1",
+                operation_started_at=OBSERVED_AT,
+                operation_finished_at=OBSERVED_AT - timedelta(seconds=1),
+                outcome=ActionOutcome.FAILED,
+                trace_id="trace-1",
+            )
+
+    def test_domain_models_reject_extra_fields_and_invalid_digest(self) -> None:
+        resource_payload = resource().model_dump(mode="json")
+        resource_payload["unexpected"] = True
+        with self.assertRaises(ValidationError):
+            ResourceRef.model_validate(resource_payload)
+
+        proposal_payload = proposal().model_dump(mode="json")
+        proposal_payload["canonical_parameter_digest"] = "not-a-sha256"
+        with self.assertRaises(ValidationError):
+            ActionProposal.model_validate(proposal_payload)
+
     def test_typed_action_variants_round_trip(self) -> None:
         for arguments in (
             RestartDeploymentArgs(schema_version="0.1", target=resource()),
