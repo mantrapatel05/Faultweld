@@ -24,7 +24,8 @@ def run(command: Sequence[str], *, capture: bool = False) -> str:
     result = subprocess.run(list(command), check=False, capture_output=capture, text=True)
     if result.returncode != 0:
         detail = result.stderr.strip() if capture else ""
-        raise ScenarioSafetyError(f"command failed: {' '.join(command)}{f': {detail}' if detail else ''}")
+        suffix = f": {detail}" if detail else ""
+        raise ScenarioSafetyError(f"command failed: {' '.join(command)}{suffix}")
     return result.stdout.strip() if capture else ""
 
 
@@ -36,7 +37,16 @@ def apply_fault(scenario: ScenarioDefinition) -> None:
     project_context()
     fault = scenario.fault
     if fault.kind == "scale":
-        run(["kubectl", "-n", NAMESPACE, "scale", f"deployment/{DEPLOYMENT}", f"--replicas={fault.replicas}"])
+        run(
+            [
+                "kubectl",
+                "-n",
+                NAMESPACE,
+                "scale",
+                f"deployment/{DEPLOYMENT}",
+                f"--replicas={fault.replicas}",
+            ]
+        )
     elif fault.kind == "readiness":
         patch = json.dumps(
             [
@@ -47,7 +57,18 @@ def apply_fault(scenario: ScenarioDefinition) -> None:
                 }
             ]
         )
-        run(["kubectl", "-n", NAMESPACE, "patch", f"deployment/{DEPLOYMENT}", "--type=json", "-p", patch])
+        run(
+            [
+                "kubectl",
+                "-n",
+                NAMESPACE,
+                "patch",
+                f"deployment/{DEPLOYMENT}",
+                "--type=json",
+                "-p",
+                patch,
+            ]
+        )
     elif fault.kind == "delete_pod":
         run(["kubectl", "-n", NAMESPACE, "delete", "pod", "-l", fault.selector])
 

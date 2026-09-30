@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.scenarios.models import ScenarioDefinition
 
-FIXTURES_DIR = Path(__file__).resolve().parents[4] / "scenarios" / "fixtures"
+FIXTURES_DIR = Path(__file__).resolve().parents[3] / "scenarios" / "fixtures"
 
 
 def load_scenarios(fixtures_dir: Path = FIXTURES_DIR) -> dict[str, ScenarioDefinition]:
