@@ -87,6 +87,8 @@ metadata:
     app.kubernetes.io/part-of: faultweld
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: faultweld-sample
