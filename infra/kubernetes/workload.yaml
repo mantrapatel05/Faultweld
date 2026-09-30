@@ -30,7 +30,10 @@ metadata:
   namespace: faultweld-demo
 rules:
   - apiGroups: [""]
-    resources: ["pods", "services"]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments", "deployments/scale"]
