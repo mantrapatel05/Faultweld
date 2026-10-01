@@ -60,7 +60,9 @@ the demo can spread across both nodes. Its demo-only agent, chatbot, MCP, and
 load-generator components are disabled to keep this milestone focused on
 observable services. A pinned `hashicorp/http-echo:1.0.0`
 deployment named `faultweld-sample` remains the small, deterministic target for
-the later scenario fixtures. Teardown refuses to run unless the active
+the later scenario fixtures. Setup pulls a Linux amd64 copy of that image and
+loads it into every kind node so scale-to-zero scenario resets do not depend on
+a second node reaching the registry. Teardown refuses to run unless the active
 kubeconfig context is exactly `kind-faultweld` and the namespace has the
 `faultweld.dev/managed=true` label; it uninstalls the Helm release, then removes
 the namespace and cluster.

@@ -1,13 +1,31 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Literal
+from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.scenarios.models import ScenarioDefinition
 
-HealthState = Literal["healthy", "faulted"]
+
+class HealthState(StrEnum):
+    HEALTHY = "healthy"
+    FAULTED = "faulted"
+
+
+class MatchState(StrEnum):
+    """Three-state view used by the repeatability gate.
+
+    ``classify_health`` collapses this into two states for operator output. The
+    repeatability gate keeps ``INDETERMINATE`` so that a partially converged
+    observation is reported as an unstable probe instead of being silently
+    accepted as a fault.
+    """
+
+    HEALTHY = "healthy"
+    FAULTED = "faulted"
+    INDETERMINATE = "indeterminate"
 
 
 class HealthObservation(BaseModel):
@@ -30,12 +48,24 @@ def observe_deployment(payload: Mapping[str, Any]) -> HealthObservation:
     )
 
 
-def classify_health(
-    scenario: ScenarioDefinition, observation: HealthObservation
-) -> HealthState:
+def observed_state(scenario: ScenarioDefinition, observation: HealthObservation) -> MatchState:
+    """Compare an observation against the fixture's declared replica tolerances."""
+    healthy = scenario.health.healthy_replicas
+    faulted = scenario.health.faulted_replicas
     if (
-        observation.available_replicas >= scenario.health.healthy_replicas
-        and observation.ready_replicas >= scenario.health.healthy_replicas
+        observation.available_replicas >= healthy
+        and observation.ready_replicas >= healthy
     ):
-        return "healthy"
-    return "faulted"
+        return MatchState.HEALTHY
+    if (
+        observation.available_replicas <= faulted
+        and observation.ready_replicas <= faulted
+    ):
+        return MatchState.FAULTED
+    return MatchState.INDETERMINATE
+
+
+def classify_health(scenario: ScenarioDefinition, observation: HealthObservation) -> HealthState:
+    if observed_state(scenario, observation) is MatchState.HEALTHY:
+        return HealthState.HEALTHY
+    return HealthState.FAULTED
