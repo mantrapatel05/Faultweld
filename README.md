@@ -67,6 +67,71 @@ kubeconfig context is exactly `kind-faultweld` and the namespace has the
 `faultweld.dev/managed=true` label; it uninstalls the Helm release, then removes
 the namespace and cluster.
 
+## Telemetry
+
+v0.3.1 adds a small metrics pipeline for the sample workload, defined in
+`infra/kubernetes/telemetry.yaml` and applied by `scripts/cluster.py setup`
+together with the rest of `infra/kubernetes`:
+
+```
+kube-state-metrics -> OpenTelemetry Collector -> Prometheus -> Grafana
+```
+
+- `kube-state-metrics` v2.15.0 reads Deployment and Pod state in `faultweld-demo`
+  only, through a namespaced read-only Role (`list`, `watch`). There is no
+  ClusterRole.
+- OpenTelemetry Collector contrib 0.128.0 scrapes it every 5 seconds and exposes the
+  result on port 8889. It also accepts OTLP on 4317/4318 for later versions. Series
+  expire 20 seconds after their source stops reporting.
+- Prometheus v3.5.0 keeps two hours of data in an `emptyDir`; Grafana 12.0.2 serves the
+  provisioned, read-only dashboard "Faultweld sample service" to anonymous viewers.
+  There is no admin account. Reach it only through a loopback port-forward.
+- This stack is separate from the OpenTelemetry Demo's own Prometheus and Grafana.
+
+Telemetry never converts missing data into health. If the collector, the scrape target,
+or the replica series is down, absent, or older than 30 seconds, the reading is
+`unavailable` or `stale` and carries no health value; dashboard panels read `no data`.
+
+```powershell
+# Dashboard (keep this terminal open), then browse to the URL below
+kubectl -n faultweld-demo port-forward --address 127.0.0.1 svc/faultweld-grafana 3000:3000
+# http://127.0.0.1:3000/d/faultweld-sample
+
+# Current telemetry reading, and the live check against the disposable cluster
+$env:PYTHONPATH = "$PWD\backend"
+.\.venv\Scripts\python scripts\telemetry.py status
+.\.venv\Scripts\python scripts\telemetry.py verify
+```
+
+`verify` resets and injects `healthy-replica-loss` and `readiness-regression`, waits
+(bounded) for telemetry to report healthy, then faulted, then healthy, and records the lag.
+It then scales `faultweld-kube-state-metrics` to zero, requires the outage to be detected
+and not read as healthy, restores it, and requires recovery. `deployment-unavailable` is
+reported as not asserted: its pod is replaced faster than a 5-second scrape reliably
+observes, so use `scripts\scenario.py health` immediately after `start` for that fixture.
+
+Resource budget (container limits and requests set in the manifest, not measured usage):
+
+| Component | Memory request / limit | CPU request |
+|---|---|---|
+| kube-state-metrics | 64Mi / 128Mi | 20m |
+| OpenTelemetry Collector | 128Mi / 256Mi | 50m |
+| Prometheus | 256Mi / 512Mi | 100m |
+| Grafana | 128Mi / 256Mi | 50m |
+
+The four pods add about 576Mi of memory requests and 1152Mi of limits on top of the
+demo. Measure real usage with `kubectl -n faultweld-demo top pods` only if metrics-server
+is installed; it is not part of this setup.
+
+To remove only the telemetry stack while keeping the rest of the cluster:
+
+```powershell
+kubectl config current-context   # must print kind-faultweld
+kubectl -n faultweld-demo delete -f infra\kubernetes\telemetry.yaml
+```
+
+Full cleanup remains `scripts\cluster.py teardown`, which removes the namespace.
+
 ## Checks
 
 ```powershell
@@ -79,6 +144,14 @@ npm --prefix frontend run lint
 npm --prefix frontend run test
 npm --prefix frontend run build
 .\.venv\Scripts\python scripts\check_hygiene.py
+```
+
+Type-check the cluster, scenario, and telemetry scripts from `backend` so mypy resolves the backend package imports:
+
+```powershell
+Push-Location backend
+..\.venv\Scripts\python -m mypy --config-file pyproject.toml ..\scripts\cluster.py ..\scripts\scenario.py ..\scripts\telemetry.py
+Pop-Location
 ```
 
 The frontend has two test layers. `npm --prefix frontend run test` runs the deterministic component suite (Vitest with jsdom) against the real application shell. The browser smoke suite drives a real Chromium instance against the Vite dev server and needs the browser binary once per machine:

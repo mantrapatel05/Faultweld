@@ -1,0 +1,636 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: faultweld-kube-state-metrics
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: faultweld-otel-collector
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: faultweld-prometheus
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: faultweld-grafana
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: faultweld-kube-state-metrics
+  namespace: faultweld-demo
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: faultweld-kube-state-metrics
+  namespace: faultweld-demo
+subjects:
+  - kind: ServiceAccount
+    name: faultweld-kube-state-metrics
+    namespace: faultweld-demo
+roleRef:
+  kind: Role
+  name: faultweld-kube-state-metrics
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faultweld-kube-state-metrics
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/name: faultweld-kube-state-metrics
+    app.kubernetes.io/part-of: faultweld
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: faultweld-kube-state-metrics
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: faultweld-kube-state-metrics
+    spec:
+      serviceAccountName: faultweld-kube-state-metrics
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.15.0
+          args:
+            - --port=8080
+            - --telemetry-port=8081
+            - --namespaces=faultweld-demo
+            - --resources=deployments,pods
+          ports:
+            - name: http-metrics
+              containerPort: 8080
+            - name: telemetry
+              containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: faultweld-kube-state-metrics
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+spec:
+  selector:
+    app.kubernetes.io/name: faultweld-kube-state-metrics
+  ports:
+    - name: http-metrics
+      port: 8080
+      targetPort: http-metrics
+    - name: telemetry
+      port: 8081
+      targetPort: telemetry
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: faultweld-otel-collector-config
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+data:
+  collector.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      prometheus/kube-state-metrics:
+        config:
+          scrape_configs:
+            - job_name: kube-state-metrics
+              scrape_interval: 5s
+              static_configs:
+                - targets: ["faultweld-kube-state-metrics:8080"]
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 160
+        spike_limit_mib: 40
+      batch: {}
+    exporters:
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        metric_expiration: 20s
+    service:
+      extensions: [health_check]
+      pipelines:
+        metrics:
+          receivers: [otlp, prometheus/kube-state-metrics]
+          processors: [memory_limiter, batch]
+          exporters: [prometheus]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faultweld-otel-collector
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/name: faultweld-otel-collector
+    app.kubernetes.io/part-of: faultweld
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: faultweld-otel-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: faultweld-otel-collector
+    spec:
+      serviceAccountName: faultweld-otel-collector
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.128.0
+          args: ["--config=/etc/otelcol/collector.yaml"]
+          ports:
+            - name: prom-export
+              containerPort: 8889
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: faultweld-otel-collector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: faultweld-otel-collector
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+spec:
+  selector:
+    app.kubernetes.io/name: faultweld-otel-collector
+  ports:
+    - name: prom-export
+      port: 8889
+      targetPort: prom-export
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: faultweld-prometheus-config
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s
+      evaluation_interval: 5s
+    rule_files:
+      - /etc/prometheus/rules.yml
+    scrape_configs:
+      - job_name: otel-collector
+        honor_labels: true
+        static_configs:
+          - targets: ["faultweld-otel-collector:8889"]
+  rules.yml: |
+    groups:
+      - name: faultweld-telemetry-sources
+        rules:
+          - alert: FaultweldKubeStateMetricsUnavailable
+            expr: 'min(up{job="kube-state-metrics"}) < 1 or absent(up{job="kube-state-metrics"})'
+            for: 15s
+            annotations:
+              summary: Kubernetes state telemetry is not being collected; health is unknown.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faultweld-prometheus
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/name: faultweld-prometheus
+    app.kubernetes.io/part-of: faultweld
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: faultweld-prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: faultweld-prometheus
+    spec:
+      serviceAccountName: faultweld-prometheus
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.5.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=2h
+            - --web.listen-address=0.0.0.0:9090
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: faultweld-prometheus-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: faultweld-prometheus
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+spec:
+  selector:
+    app.kubernetes.io/name: faultweld-prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: faultweld-grafana-datasources
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Faultweld Prometheus
+        uid: faultweld-prometheus
+        type: prometheus
+        access: proxy
+        url: http://faultweld-prometheus:9090
+        isDefault: true
+        editable: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: faultweld-grafana-dashboard-provider
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: faultweld
+        orgId: 1
+        type: file
+        disableDeletion: true
+        allowUiUpdates: false
+        options:
+          path: /etc/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: faultweld-grafana-dashboards
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+data:
+  faultweld-sample.json: |
+    {
+      "uid": "faultweld-sample",
+      "title": "Faultweld sample service",
+      "tags": ["faultweld"],
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": false,
+      "refresh": "5s",
+      "time": {"from": "now-15m", "to": "now"},
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "Available replicas",
+          "description": "No data means the telemetry source is not reporting. It is not a healthy reading.",
+          "datasource": {"type": "prometheus", "uid": "faultweld-prometheus"},
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+          "targets": [{"refId": "A", "instant": true, "expr": "sum(kube_deployment_status_replicas_available{namespace='faultweld-demo',deployment='faultweld-sample'})"}],
+          "fieldConfig": {"defaults": {"noValue": "no data", "decimals": 0}, "overrides": []},
+          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+        },
+        {
+          "id": 2, "type": "stat", "title": "Desired replicas",
+          "datasource": {"type": "prometheus", "uid": "faultweld-prometheus"},
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+          "targets": [{"refId": "A", "instant": true, "expr": "sum(kube_deployment_spec_replicas{namespace='faultweld-demo',deployment='faultweld-sample'})"}],
+          "fieldConfig": {"defaults": {"noValue": "no data", "decimals": 0}, "overrides": []},
+          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+        },
+        {
+          "id": 3, "type": "stat", "title": "Ready pods",
+          "datasource": {"type": "prometheus", "uid": "faultweld-prometheus"},
+          "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+          "targets": [{"refId": "A", "instant": true, "expr": "sum(kube_pod_status_ready{namespace='faultweld-demo',condition='true',pod=~'faultweld-sample-.*'})"}],
+          "fieldConfig": {"defaults": {"noValue": "no data", "decimals": 0}, "overrides": []},
+          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+        },
+        {
+          "id": 4, "type": "stat", "title": "Evidence age",
+          "description": "Seconds since Prometheus last received the replica metric. No data means it has stopped arriving.",
+          "datasource": {"type": "prometheus", "uid": "faultweld-prometheus"},
+          "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+          "targets": [{"refId": "A", "instant": true, "expr": "time() - max(timestamp(kube_deployment_status_replicas_available{namespace='faultweld-demo',deployment='faultweld-sample'}))"}],
+          "fieldConfig": {"defaults": {"noValue": "no data", "unit": "s", "decimals": 0}, "overrides": []},
+          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+        },
+        {
+          "id": 5, "type": "stat", "title": "Kubernetes state source",
+          "description": "Collector scrape of kube-state-metrics. down or no data means health is unknown.",
+          "datasource": {"type": "prometheus", "uid": "faultweld-prometheus"},
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 4},
+          "targets": [{"refId": "A", "instant": true, "expr": "min(up{job='kube-state-metrics'})"}],
+          "fieldConfig": {"defaults": {"noValue": "no data", "mappings": [{"type": "value", "options": {"0": {"text": "down"}, "1": {"text": "up"}}}]}, "overrides": []},
+          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+        },
+        {
+          "id": 6, "type": "stat", "title": "Collector pipeline",
+          "description": "Prometheus scrape of the OpenTelemetry Collector. down or no data means health is unknown.",
+          "datasource": {"type": "prometheus", "uid": "faultweld-prometheus"},
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 4},
+          "targets": [{"refId": "A", "instant": true, "expr": "min(up{job='otel-collector'})"}],
+          "fieldConfig": {"defaults": {"noValue": "no data", "mappings": [{"type": "value", "options": {"0": {"text": "down"}, "1": {"text": "up"}}}]}, "overrides": []},
+          "options": {"colorMode": "none", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+        },
+        {
+          "id": 7, "type": "timeseries", "title": "Replicas over time",
+          "datasource": {"type": "prometheus", "uid": "faultweld-prometheus"},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [
+            {"refId": "A", "legendFormat": "available", "expr": "sum(kube_deployment_status_replicas_available{namespace='faultweld-demo',deployment='faultweld-sample'})"},
+            {"refId": "B", "legendFormat": "desired", "expr": "sum(kube_deployment_spec_replicas{namespace='faultweld-demo',deployment='faultweld-sample'})"}
+          ],
+          "fieldConfig": {"defaults": {"decimals": 0, "min": 0}, "overrides": []},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}
+        },
+        {
+          "id": 8, "type": "timeseries", "title": "Pod readiness and restarts",
+          "datasource": {"type": "prometheus", "uid": "faultweld-prometheus"},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [
+            {"refId": "A", "legendFormat": "ready pods", "expr": "sum(kube_pod_status_ready{namespace='faultweld-demo',condition='true',pod=~'faultweld-sample-.*'})"},
+            {"refId": "B", "legendFormat": "container restarts", "expr": "sum(kube_pod_container_status_restarts_total{namespace='faultweld-demo',pod=~'faultweld-sample-.*'})"}
+          ],
+          "fieldConfig": {"defaults": {"decimals": 0, "min": 0}, "overrides": []},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faultweld-grafana
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/name: faultweld-grafana
+    app.kubernetes.io/part-of: faultweld
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: faultweld-grafana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: faultweld-grafana
+    spec:
+      serviceAccountName: faultweld-grafana
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grafana
+          image: grafana/grafana:12.0.2
+          env:
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Viewer
+            - name: GF_AUTH_DISABLE_LOGIN_FORM
+              value: "true"
+            - name: GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION
+              value: "true"
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+            - name: GF_PLUGINS_PREINSTALL_DISABLED
+              value: "true"
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            - name: dashboards
+              mountPath: /etc/grafana/dashboards
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/grafana
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: datasources
+          configMap:
+            name: faultweld-grafana-datasources
+        - name: dashboard-provider
+          configMap:
+            name: faultweld-grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            name: faultweld-grafana-dashboards
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: faultweld-grafana
+  namespace: faultweld-demo
+  labels:
+    app.kubernetes.io/part-of: faultweld
+spec:
+  selector:
+    app.kubernetes.io/name: faultweld-grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
