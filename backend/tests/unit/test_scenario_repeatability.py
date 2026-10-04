@@ -66,14 +66,15 @@ class SimulatedCluster:
     """Minimal model of the faultweld-sample deployment on a Recreate strategy.
 
     Only the state that the scenario fixtures can change is modelled: the
-    replica count, the readiness probe path, and pod presence. The observed
-    ``status`` block is derived from that state exactly as a real deployment
-    would report it for a single replica.
+    replica count, the readiness probe path and port, and pod presence. The
+    observed ``status`` block is derived from that state exactly as a real
+    deployment would report it for a single replica.
     """
 
     def __init__(self, *, ignore_first_fault: bool = False) -> None:
         self.replicas = 1
         self.readiness_path = "/"
+        self.readiness_port: str | int = "http"
         self.pod_exists = True
         self.generation = 1
         self.ignore_first_fault = ignore_first_fault
@@ -82,11 +83,14 @@ class SimulatedCluster:
 
     @property
     def available(self) -> bool:
-        return self.pod_exists and self.readiness_path == "/"
+        return (
+            self.pod_exists and self.readiness_path == "/" and self.readiness_port == "http"
+        )
 
     def reset(self) -> None:
         self.replicas = 1
         self.readiness_path = "/"
+        self.readiness_port = "http"
         self.pod_exists = True
 
     def _maybe_skip_fault(self) -> bool:
@@ -119,7 +123,14 @@ class SimulatedCluster:
             self.pod_exists = self.replicas > 0
             return ""
         if verb == "patch":
-            self.readiness_path = str(json.loads(cmd[-1])[0]["value"])
+            for op in json.loads(cmd[-1]):
+                if op["path"].endswith("/readinessProbe/httpGet/path"):
+                    self.readiness_path = str(op["value"])
+                elif op["path"].endswith("/readinessProbe/httpGet/port"):
+                    value = op["value"]
+                    self.readiness_port = value if isinstance(value, int) else str(value)
+                else:
+                    raise AssertionError(f"unexpected patch path: {op['path']}")
             self.pod_exists = True
             return ""
         if verb == "delete":
@@ -243,6 +254,7 @@ class FixtureRepeatabilityTests(TestCase):
         drive(scenario, sim, repeats=3)
         self.assertEqual(sim.replicas, 1)
         self.assertEqual(sim.readiness_path, "/")
+        self.assertEqual(sim.readiness_port, "http")
         self.assertTrue(sim.available)
         reset_calls = [cmd for cmd in sim.commands if cmd[0] == "python"]
         self.assertEqual(len(reset_calls), 3 * 4)
@@ -273,8 +285,15 @@ class FixtureRepeatabilityTests(TestCase):
         )
         for item in payload["scenarios"]:
             self.assertTrue(item["passed"])
-            self.assertEqual(item["fixture_version"], "1")
             self.assertEqual(item["failures"], [])
+        self.assertEqual(
+            {item["scenario_id"]: item["fixture_version"] for item in payload["scenarios"]},
+            {
+                "deployment-unavailable": "1",
+                "healthy-replica-loss": "1",
+                "readiness-regression": "2",
+            },
+        )
 
     def test_report_payload_excludes_evaluator_labels(self) -> None:
         sim = SimulatedCluster()

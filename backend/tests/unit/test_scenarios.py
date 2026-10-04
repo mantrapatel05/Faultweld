@@ -30,6 +30,22 @@ class ScenarioContractTests(TestCase):
         with self.assertRaises(ValidationError):
             ScenarioDefinition.model_validate(payload)
 
+    def test_readiness_fault_requires_path_or_port(self) -> None:
+        payload = json.loads((FIXTURES / "healthy-replica-loss.json").read_text(encoding="utf-8"))
+        bad = {**payload, "fault": {"kind": "readiness"}}
+        with self.assertRaises(ValidationError):
+            ScenarioDefinition.model_validate(bad)
+        out_of_range = {**payload, "fault": {"kind": "readiness", "port": 70000}}
+        with self.assertRaises(ValidationError):
+            ScenarioDefinition.model_validate(out_of_range)
+        faults = (
+            {"kind": "readiness", "path": "/unhealthy"},
+            {"kind": "readiness", "port": 9},
+        )
+        for fault in faults:
+            good = {**payload, "fault": fault}
+            self.assertEqual(ScenarioDefinition.model_validate(good).fault.kind, "readiness")
+
     def test_fixture_cannot_escape_project_namespace_or_deployment(self) -> None:
         payload = json.loads((FIXTURES / "healthy-replica-loss.json").read_text(encoding="utf-8"))
         payload["namespace"] = "kube-system"

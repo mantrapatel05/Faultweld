@@ -58,7 +58,7 @@ class ScenarioControllerTests(TestCase):
             ],
         )
 
-    def test_trigger_readiness_fault_patches_probe_path(self) -> None:
+    def test_trigger_readiness_fault_patches_probe_port(self) -> None:
         scenario = fixture("readiness-regression")
         with patch.object(controller, "run") as run:
             controller.apply_fault(scenario)
@@ -68,7 +68,23 @@ class ScenarioControllerTests(TestCase):
         )
         self.assertEqual(patch_call[4], "deployment/faultweld-sample")
         payload = json.loads(patch_call[-1])
-        self.assertEqual(payload[0]["value"], "/unhealthy")
+        by_path = {op["path"]: op["value"] for op in payload}
+        self.assertEqual(
+            by_path["/spec/template/spec/containers/0/readinessProbe/httpGet/port"], 9
+        )
+
+    def test_trigger_readiness_fault_patches_probe_path_when_set(self) -> None:
+        scenario = fixture("readiness-regression")
+        fault = ScenarioFault.model_validate({"kind": "readiness", "path": "/unhealthy"})
+        patched = scenario.model_copy(update={"fault": fault})
+        with patch.object(controller, "run") as run:
+            controller.apply_fault(patched)
+        payload = json.loads(run.call_args_list[-1].args[0][-1])
+        by_path = {op["path"]: op["value"] for op in payload}
+        self.assertEqual(
+            by_path["/spec/template/spec/containers/0/readinessProbe/httpGet/path"],
+            "/unhealthy",
+        )
 
     def test_trigger_delete_pod_fault_uses_fixture_selector(self) -> None:
         scenario = fixture("deployment-unavailable")
@@ -130,11 +146,23 @@ class ScenarioControllerTests(TestCase):
 
     def test_fault_missing_argument_is_rejected(self) -> None:
         fault = ScenarioFault.model_construct(
-            kind="scale", replicas=None, path=None, selector=None
+            kind="scale", replicas=None, path=None, port=None, selector=None
         )
         scenario = fixture("healthy-replica-loss").model_copy(update={"fault": fault})
         with patch.object(controller, "run") as run:
             with self.assertRaisesRegex(controller.ScenarioSafetyError, "missing replicas"):
+                controller.apply_fault(scenario)
+            run.assert_not_called()
+
+    def test_readiness_fault_missing_path_and_port_is_rejected(self) -> None:
+        fault = ScenarioFault.model_construct(
+            kind="readiness", replicas=None, path=None, port=None, selector=None
+        )
+        scenario = fixture("readiness-regression").model_copy(update={"fault": fault})
+        with patch.object(controller, "run") as run:
+            with self.assertRaisesRegex(
+                controller.ScenarioSafetyError, "missing path or port"
+            ):
                 controller.apply_fault(scenario)
             run.assert_not_called()
 

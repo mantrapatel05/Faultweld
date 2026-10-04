@@ -1,14 +1,14 @@
 {
   "schema_version": "0.2",
   "scenario_id": "readiness-regression",
-  "version": "1",
+  "version": "2",
   "title": "Sample service readiness probe is unavailable",
   "environment_id": "kind-faultweld",
   "namespace": "faultweld-demo",
   "target_deployment": "faultweld-sample",
   "initial_replicas": 1,
-  "fault": {"kind": "readiness", "path": "/unhealthy"},
+  "fault": {"kind": "readiness", "port": 9},
   "alert": {"alert_id": "alert-readiness", "summary": "faultweld-sample readiness is failing"},
   "health": {"healthy_replicas": 1, "faulted_replicas": 0},
-  "cleanup": {"readiness_path": "/"}
+  "cleanup": {"readiness_path": "/", "readiness_port": "http"}
 }

@@ -75,17 +75,26 @@ def fault_command(scenario: ScenarioDefinition) -> list[str]:
             f"--replicas={fault.replicas}",
         ]
     if fault.kind == "readiness":
-        if fault.path is None:
-            raise ScenarioSafetyError("readiness fault is missing path")
-        patch = json.dumps(
-            [
+        if fault.path is None and fault.port is None:
+            raise ScenarioSafetyError("readiness fault is missing path or port")
+        ops: list[dict[str, Any]] = []
+        if fault.path is not None:
+            ops.append(
                 {
                     "op": "replace",
                     "path": "/spec/template/spec/containers/0/readinessProbe/httpGet/path",
                     "value": fault.path,
                 }
-            ]
-        )
+            )
+        if fault.port is not None:
+            ops.append(
+                {
+                    "op": "replace",
+                    "path": "/spec/template/spec/containers/0/readinessProbe/httpGet/port",
+                    "value": fault.port,
+                }
+            )
+        patch = json.dumps(ops)
         return [
             "kubectl",
             "-n",

@@ -124,6 +124,18 @@ def reset() -> None:
             "kubectl",
             "-n",
             NAMESPACE,
+            "patch",
+            f"deployment/{SAMPLE_DEPLOYMENT}",
+            "--type=json",
+            "-p",
+            '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/port","value":"http"}]',
+        ]
+    )
+    run(
+        [
+            "kubectl",
+            "-n",
+            NAMESPACE,
             "rollout",
             "status",
             f"deployment/{SAMPLE_DEPLOYMENT}",

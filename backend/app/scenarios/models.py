@@ -16,13 +16,14 @@ class ScenarioFault(ScenarioPart):
     kind: ScenarioFaultKind
     replicas: int | None = Field(default=None, ge=0, le=1)
     path: str | None = None
+    port: int | None = Field(default=None, ge=1, le=65535)
     selector: str | None = None
 
     @model_validator(mode="after")
     def validate_kind_arguments(self) -> ScenarioFault:
         expected_fields = {
             "scale": self.replicas is not None,
-            "readiness": self.path is not None,
+            "readiness": self.path is not None or self.port is not None,
             "delete_pod": self.selector is not None,
         }
         if not expected_fields[self.kind]:
@@ -43,6 +44,7 @@ class ScenarioHealth(ScenarioPart):
 class ScenarioCleanup(ScenarioPart):
     replicas: int | None = Field(default=None, ge=0, le=1)
     readiness_path: str | None = None
+    readiness_port: int | str | None = None
 
 
 class ScenarioDefinition(ScenarioPart):
