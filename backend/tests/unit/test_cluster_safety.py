@@ -172,10 +172,11 @@ class ClusterIsolationTests(TestCase):
             stdout = "faultweld\n"
             stderr = ""
 
-        with patch.object(cluster, "run", side_effect=fake.run):
-            with patch.object(cluster.subprocess, "run", return_value=KindResult()):
-                with self.assertRaisesRegex(cluster.ClusterSafetyError, "refusing"):
-                    cluster.setup()
+        with patch.object(cluster, "require_tools"):
+            with patch.object(cluster, "run", side_effect=fake.run):
+                with patch.object(cluster.subprocess, "run", return_value=KindResult()):
+                    with self.assertRaisesRegex(cluster.ClusterSafetyError, "refusing"):
+                        cluster.setup()
         fake.assert_no_destructive_commands()
 
 

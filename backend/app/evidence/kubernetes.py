@@ -26,7 +26,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.domain.schemas import SCHEMA_VERSION, Evidence, EvidenceFreshness, EvidenceSourceType
+from app.domain.schemas import Evidence, EvidenceFreshness, EvidenceSourceType
 from app.evidence.models import EvidenceContext, EvidenceItem, EvidenceReadError, ReadOutcome
 from app.evidence.normalize import (
     normalize_deployment,
@@ -307,7 +307,7 @@ class KubernetesEvidenceAdapter:
         evidence_id = f"ev-k8s-{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:16]}"
         try:
             record = Evidence(
-                schema_version=SCHEMA_VERSION,
+                schema_version="0.1",
                 evidence_id=evidence_id,
                 incident_id=context.incident_id,
                 run_id=context.run_id,

@@ -130,7 +130,12 @@ def pod_object(name: str = "faultweld-sample-abc12-xyz98", namespace: str = NS) 
                 {
                     "name": "http",
                     "image": "hashicorp/http-echo:1.0.0",
-                    "env": [{"name": "X", "valueFrom": {"secretKeyRef": {"name": "s", "key": "k"}}}],
+                    "env": [
+                        {
+                            "name": "X",
+                            "valueFrom": {"secretKeyRef": {"name": "s", "key": "k"}},
+                        }
+                    ],
                 }
             ],
             "volumes": [{"name": "kube-api-access", "projected": {}}],
@@ -176,7 +181,9 @@ def list_response(kind: str, items: list[dict[str, Any]], cont: str | None = Non
 
 
 DEPLOYMENT_QUERY = KubernetesQuery(kind=ResourceKind.DEPLOYMENT, name="faultweld-sample")
-POD_QUERY = KubernetesQuery(kind=ResourceKind.POD, label_selector="app.kubernetes.io/name=faultweld-sample")
+POD_QUERY = KubernetesQuery(
+    kind=ResourceKind.POD, label_selector="app.kubernetes.io/name=faultweld-sample"
+)
 SERVICE_QUERY = KubernetesQuery(kind=ResourceKind.SERVICE, name="faultweld-sample")
 
 
@@ -366,10 +373,13 @@ class PodAndServiceEvidenceTests(TestCase):
 
     def test_waiting_container_reports_its_reason(self) -> None:
         pod = pod_object()
-        pod["status"]["containerStatuses"][0]["state"] = {"waiting": {"reason": "ContainerCreating"}}
+        pod["status"]["containerStatuses"][0]["state"] = {
+            "waiting": {"reason": "ContainerCreating"}
+        }
         pod["status"]["containerStatuses"][0]["ready"] = False
         adapter, _ = make_adapter({request_path(POD_QUERY): list_response("Pod", [pod])})
-        status = as_json(adapter.read(CONTEXT, POD_QUERY).items[0])["status"]["containerStatuses"][0]
+        item = adapter.read(CONTEXT, POD_QUERY).items[0]
+        status = as_json(item)["status"]["containerStatuses"][0]
         self.assertEqual(status["state"], {"phase": "waiting", "reason": "ContainerCreating"})
         self.assertFalse(status["ready"])
 
@@ -483,7 +493,9 @@ class IsolationAndFailureTests(TestCase):
     def test_a_named_read_returning_a_different_object_is_malformed(self) -> None:
         document = deployment_object()
         document["metadata"]["name"] = "something-else"
-        self.assertEqual(self.code_for(json.dumps(document), DEPLOYMENT_QUERY), "malformed_response")
+        self.assertEqual(
+            self.code_for(json.dumps(document), DEPLOYMENT_QUERY), "malformed_response"
+        )
 
     def test_malformed_responses_are_rejected(self) -> None:
         wrong_kind = json.dumps({**deployment_object(), "kind": "Pod"})
@@ -507,7 +519,9 @@ class IsolationAndFailureTests(TestCase):
     def test_a_missing_name_is_malformed(self) -> None:
         document = deployment_object()
         del document["metadata"]["name"]
-        self.assertEqual(self.code_for(json.dumps(document), DEPLOYMENT_QUERY), "malformed_response")
+        self.assertEqual(
+            self.code_for(json.dumps(document), DEPLOYMENT_QUERY), "malformed_response"
+        )
 
     def test_not_found_is_an_outcome_not_evidence(self) -> None:
         for query in (DEPLOYMENT_QUERY, POD_QUERY):

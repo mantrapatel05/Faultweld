@@ -77,7 +77,12 @@ class KubectlTransportTests(TestCase):
 
     def test_paths_outside_the_readable_api_groups_are_rejected(self) -> None:
         transport = KubectlRawTransport()
-        for path in ("/healthz", "/metrics", "/apis/rbac.authorization.k8s.io/v1/roles", "api/v1/pods"):
+        for path in (
+            "/healthz",
+            "/metrics",
+            "/apis/rbac.authorization.k8s.io/v1/roles",
+            "api/v1/pods",
+        ):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 transport.command(path)
 
