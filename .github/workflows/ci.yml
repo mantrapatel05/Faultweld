@@ -31,12 +31,16 @@ jobs:
         run: python -m ruff check --config=../ruff.toml ../scripts/cluster.py
       - name: Telemetry script lint
         run: python -m ruff check --config=../ruff.toml ../scripts/telemetry.py
+      - name: Evidence script lint
+        run: python -m ruff check --config=../ruff.toml ../scripts/evidence.py
       - name: Typecheck
         run: python -m mypy app tests
       - name: Cluster manager typecheck
         run: python -m mypy --config-file pyproject.toml ../scripts/cluster.py
       - name: Telemetry script typecheck
         run: python -m mypy --config-file pyproject.toml ../scripts/telemetry.py
+      - name: Evidence script typecheck
+        run: python -m mypy --config-file pyproject.toml ../scripts/evidence.py
       - name: Domain schema tests
         run: python -m unittest discover -s tests -p "test_*.py"
       - name: Frontend API types are generated from OpenAPI

@@ -4,7 +4,6 @@ import argparse
 import json
 import shutil
 import subprocess
-import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,6 @@ CLUSTER_NAME = "faultweld"
 CONTEXT = f"kind-{CLUSTER_NAME}"
 NAMESPACE = "faultweld-demo"
 SAMPLE_DEPLOYMENT = "faultweld-sample"
-SAMPLE_IMAGE = "hashicorp/http-echo:1.0.0"
 OTEL_RELEASE = "faultweld-demo"
 OTEL_CHART = "opentelemetry-demo"
 OTEL_CHART_VERSION = "0.42.0"
@@ -76,7 +74,7 @@ def require_project_namespace() -> None:
 
 
 def setup() -> None:
-    require_tools("docker", "kind", "kubectl", "helm")
+    require_tools("kind", "kubectl", "helm")
     existing = subprocess.run(
         ["kind", "get", "clusters"], check=False, capture_output=True, text=True
     )
@@ -88,7 +86,6 @@ def setup() -> None:
         require_project_namespace()
     require_project_context()
     make_control_planes_schedulable()
-    load_sample_image()
     run(["kubectl", "apply", "-f", str(KUBERNETES_DIR)])
     install_demo()
     run(
@@ -117,18 +114,6 @@ def reset() -> None:
             "--type=json",
             "-p",
             '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/path","value":"/"}]',
-        ]
-    )
-    run(
-        [
-            "kubectl",
-            "-n",
-            NAMESPACE,
-            "patch",
-            f"deployment/{SAMPLE_DEPLOYMENT}",
-            "--type=json",
-            "-p",
-            '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/port","value":"http"}]',
         ]
     )
     run(
@@ -176,27 +161,6 @@ def make_control_planes_schedulable() -> None:
                     "node-role.kubernetes.io/control-plane-",
                 ]
             )
-
-
-def load_sample_image() -> None:
-    run(["docker", "pull", "--platform=linux/amd64", SAMPLE_IMAGE])
-    with tempfile.NamedTemporaryFile(suffix=".tar", delete=False) as archive:
-        archive_path = Path(archive.name)
-    try:
-        run(
-            [
-                "docker",
-                "save",
-                "--platform",
-                "linux/amd64",
-                "--output",
-                str(archive_path),
-                SAMPLE_IMAGE,
-            ]
-        )
-        run(["kind", "load", "image-archive", str(archive_path), "--name", CLUSTER_NAME])
-    finally:
-        archive_path.unlink(missing_ok=True)
 
 
 def teardown() -> None:
