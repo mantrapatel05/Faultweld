@@ -98,6 +98,20 @@ and Service; that a missing resource is reported as not found; that the agent id
 read Secrets or other namespaces and cannot write; and that payloads contain no sensitive
 fields.
 
+## Faultweld Lite (simulated cluster)
+
+The default environment is an in-process simulation of the sample deployment, so no Docker or
+Kubernetes is needed. The kind-based setup above remains available as an optional real mode.
+
+```powershell
+.\.venv\Scripts\python scripts\sim.py run healthy-replica-loss
+.\.venv\Scripts\python scripts\sim.py watch deployment-unavailable
+.\.venv\Scripts\python scripts\sim.py verify
+```
+
+Time in the simulation is a tick counter, so a deleted pod is replaced after exactly three
+ticks on every run.
+
 ## Checks
 
 ```powershell
