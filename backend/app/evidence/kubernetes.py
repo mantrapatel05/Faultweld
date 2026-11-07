@@ -27,6 +27,7 @@ from pydantic import (
 )
 
 from app.domain.schemas import Evidence, EvidenceFreshness, EvidenceSourceType
+from app.evidence.canonical import canonical_json as canonical_json
 from app.evidence.models import EvidenceContext, EvidenceItem, EvidenceReadError, ReadOutcome
 from app.evidence.normalize import (
     normalize_deployment,
@@ -166,10 +167,6 @@ def describe_query(query: KubernetesQuery) -> str:
         return f"{base} name={query.name}"
     selector = f" selector={query.label_selector}" if query.label_selector else ""
     return f"{base}{selector} limit={query.limit}"
-
-
-def canonical_json(payload: Mapping[str, JsonValue]) -> str:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def _utc_now() -> datetime:
