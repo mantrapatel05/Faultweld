@@ -54,7 +54,12 @@ TRANSITIONS: dict[ProposalState, frozenset[ProposalState]] = {
     ),
     ProposalState.EXECUTED: frozenset({ProposalState.VERIFYING}),
     ProposalState.EXECUTION_UNKNOWN: frozenset(
-        {ProposalState.EXECUTING, ProposalState.VERIFYING, ProposalState.FAILED}
+        {
+            ProposalState.EXECUTING,
+            ProposalState.EXECUTED,
+            ProposalState.VERIFYING,
+            ProposalState.FAILED,
+        }
     ),
     ProposalState.FAILED: frozenset(),
     ProposalState.VERIFYING: frozenset(

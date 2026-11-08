@@ -22,6 +22,7 @@ from app.agent.ids import IdFactory, uuid_id
 from app.agent.proposal import proposal_digest
 from app.domain.schemas import (
     ActionAttempt,
+    ActionOutcome,
     ActionProposal,
     Approval,
     ApprovalDecision,
@@ -112,6 +113,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     outcome TEXT NOT NULL,
     error_class TEXT,
     json TEXT NOT NULL,
+    execution_context TEXT NOT NULL DEFAULT '{}',
     FOREIGN KEY (proposal_id) REFERENCES proposals(proposal_id)
 );
 
@@ -195,6 +197,14 @@ class Store:
         """Create every table and trigger. Safe to call repeatedly on the same file."""
         connection = self._conn()
         connection.executescript(SCHEMA)
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(attempts)").fetchall()
+        }
+        if "execution_context" not in columns:
+            connection.execute(
+                "ALTER TABLE attempts ADD COLUMN execution_context TEXT NOT NULL DEFAULT '{}'"
+            )
         connection.commit()
 
     def close(self) -> None:
@@ -402,6 +412,13 @@ class Store:
 
     def get_proposal(self, proposal_id: str) -> StoredProposal | None:
         row = self._proposal_row(proposal_id)
+        return None if row is None else self._stored_proposal(row)
+
+    def get_latest_proposal(self) -> StoredProposal | None:
+        row = self._conn().execute(
+            "SELECT proposal_id, incident_id, digest, json, state, version "
+            "FROM proposals ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
         return None if row is None else self._stored_proposal(row)
 
     def get_decision(self, proposal_id: str) -> StoredDecision | None:
@@ -752,6 +769,328 @@ class Store:
                 {"proposal_id": attempt.proposal_id, "outcome": attempt.outcome.value},
             )
 
+    def record_gateway_rejection(self, proposal_id: str, reason_code: str) -> None:
+        with self._conn():
+            self._audit(
+                "gateway_rejected",
+                proposal_id,
+                {"reason_code": reason_code},
+            )
+
+    def claim_attempt(
+        self,
+        approval_id: str,
+        attempt: ActionAttempt,
+        execution_context: Mapping[str, JsonValue],
+    ) -> None:
+        """Atomically consume approval, claim its idempotency key and start execution."""
+        connection = self._conn()
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            approval_row = self._approval_row(approval_id)
+            if approval_row is None:
+                raise StoreError(reasons.APPROVAL_NOT_FOUND, "approval disappeared")
+            approval = self._stored_approval(approval_row).approval
+            if approval.revoked:
+                raise StoreError(reasons.ALREADY_REVOKED, "approval was revoked")
+            if approval.decision is not ApprovalDecision.APPROVE:
+                raise StoreError(reasons.APPROVAL_REJECTED, "approval records a rejection")
+            if approval.consumed:
+                raise StoreError(reasons.APPROVAL_CONSUMED, "approval was already consumed")
+            if self._now() >= approval.expires_at:
+                raise StoreError(reasons.APPROVAL_EXPIRED, "approval has expired")
+            if approval.approver_role not in self._policy_config.required_approval_roles:
+                raise StoreError(reasons.ROLE_NOT_PERMITTED, "approver role is no longer permitted")
+
+            proposal_row = self._proposal_row(attempt.proposal_id)
+            if proposal_row is None:
+                raise StoreError(reasons.PROPOSAL_NOT_FOUND, "proposal disappeared")
+            stored = self._stored_proposal(proposal_row)
+            if stored.state is not ProposalState.AUTHORIZED:
+                raise StoreError(
+                    reasons.ILLEGAL_TRANSITION,
+                    f"proposal is {stored.state.value}, not authorized",
+                )
+            claim_now = self._now()
+            if claim_now >= stored.proposal.expires_at:
+                raise StoreError(reasons.PROPOSAL_EXPIRED, "proposal expired before claim")
+            current_bundle = policy_bundle_digest(self._policy_config)
+            if (
+                stored.proposal.policy_version != self._policy_config.policy_version
+                or stored.proposal.policy_bundle_digest != current_bundle
+                or approval.policy_version != self._policy_config.policy_version
+                or str(approval_row["policy_bundle_digest"]) != current_bundle
+            ):
+                raise StoreError(reasons.POLICY_CHANGED, "policy changed before claim")
+            if (
+                proposal_digest(stored.proposal) != stored.digest
+                or approval.proposal_digest != stored.digest
+                or attempt.preflight.proposal_digest != stored.digest
+            ):
+                raise StoreError(reasons.DIGEST_MISMATCH, "proposal digest changed before claim")
+            target_identity = canonical_json(
+                stored.proposal.arguments.target.model_dump(mode="json")
+            )
+            if approval.proposal_id != stored.proposal.proposal_id or target_identity != str(
+                approval_row["target_identity"]
+            ):
+                raise StoreError(reasons.DIGEST_MISMATCH, "approval target no longer matches")
+            snapshot = self._fresh_snapshot()
+            if (
+                snapshot.state_fingerprint != approval.state_fingerprint
+                or snapshot.state_fingerprint != attempt.preflight.state_fingerprint
+            ):
+                raise StoreError(
+                    reasons.STATE_CHANGED_SINCE_PROPOSAL,
+                    "live state changed before the execution claim",
+                )
+            incident = self.get_incident(stored.proposal.incident_id)
+            if incident is None:
+                raise StoreError(reasons.INCIDENT_NOT_FOUND, "incident disappeared before claim")
+            current_decision = evaluate(
+                self._policy_config,
+                PolicyInput(
+                    proposal_id=stored.proposal.proposal_id,
+                    action_type=stored.proposal.action_type,
+                    arguments=stored.proposal.arguments,
+                    target=stored.proposal.arguments.target,
+                    scenario_id=incident.scenario_id,
+                    current_snapshot=snapshot,
+                    now=claim_now,
+                    proposal_created_at=stored.proposal.created_at,
+                    proposal_expires_at=stored.proposal.expires_at,
+                    environment_id=stored.proposal.environment_id,
+                    incident_status=incident.status,
+                    attempts_so_far=self._attempt_count(stored.proposal.proposal_id),
+                ),
+            )
+            if current_decision.decision is PolicyDecisionType.DENY:
+                raise StoreError(reasons.POLICY_DENIED, "policy denied before claim")
+            if current_decision.decision is not PolicyDecisionType.REQUIRE_APPROVAL:
+                raise StoreError(reasons.POLICY_CHANGED, "approval is no longer required")
+            if approval.proposal_id != attempt.proposal_id:
+                raise StoreError(
+                    reasons.APPROVAL_NOT_FOUND, "approval belongs to another proposal"
+                )
+            if attempt.idempotency_key != stored.proposal.idempotency_key:
+                raise StoreError(
+                    reasons.IDEMPOTENCY_CONFLICT, "attempt key does not match proposal"
+                )
+
+            updated = connection.execute(
+                "UPDATE approvals SET consumed = 1, version = version + 1 "
+                "WHERE approval_id = ? AND consumed = 0 AND revoked = 0",
+                (approval_id,),
+            )
+            if updated.rowcount != 1:
+                raise StoreError(reasons.APPROVAL_CONSUMED, "approval was claimed concurrently")
+            self._insert_attempt_locked(attempt, execution_context)
+            self._transition_locked(stored, ProposalState.EXECUTING)
+            self._audit(
+                "execution_claimed",
+                attempt.attempt_id,
+                {"proposal_id": attempt.proposal_id, "approval_id": approval_id},
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+    def claim_retry(self, retry: ActionAttempt) -> ActionAttempt:
+        """Reclaim an unchanged UNKNOWN attempt once if its proposal permits another try."""
+        connection = self._conn()
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            attempt_row = connection.execute(
+                "SELECT json FROM attempts WHERE idempotency_key = ?",
+                (retry.idempotency_key,),
+            ).fetchone()
+            if attempt_row is None:
+                raise StoreError(reasons.DUPLICATE_ATTEMPT_KEY, "unknown attempt key")
+            attempt = ActionAttempt.model_validate_json(attempt_row["json"])
+            proposal_row = self._proposal_row(attempt.proposal_id)
+            if proposal_row is None:
+                raise StoreError(reasons.PROPOSAL_NOT_FOUND, "proposal disappeared")
+            stored = self._stored_proposal(proposal_row)
+            if (
+                attempt.outcome is not ActionOutcome.EXECUTION_UNKNOWN
+                or stored.state is not ProposalState.EXECUTION_UNKNOWN
+            ):
+                raise StoreError(reasons.DUPLICATE_ATTEMPT_KEY, "attempt is not recoverable")
+            approval_row = self._approval_row_for_proposal(stored.proposal.proposal_id)
+            if approval_row is None:
+                raise StoreError(reasons.APPROVAL_NOT_FOUND, "approval disappeared")
+            approval = self._stored_approval(approval_row).approval
+            if approval.revoked:
+                raise StoreError(reasons.ALREADY_REVOKED, "approval was revoked")
+            if approval.decision is not ApprovalDecision.APPROVE:
+                raise StoreError(reasons.APPROVAL_REJECTED, "approval records a rejection")
+            if not approval.consumed:
+                raise StoreError(reasons.APPROVAL_NOT_FOUND, "approval is no longer claimed")
+            now = self._now()
+            if now >= approval.expires_at or now >= stored.proposal.expires_at:
+                raise StoreError(reasons.APPROVAL_EXPIRED, "approval expired before retry")
+            if approval.approver_role not in self._policy_config.required_approval_roles:
+                raise StoreError(reasons.ROLE_NOT_PERMITTED, "approval role is no longer permitted")
+            bundle_digest = policy_bundle_digest(self._policy_config)
+            if (
+                approval.policy_version != self._policy_config.policy_version
+                or str(approval_row["policy_bundle_digest"]) != bundle_digest
+                or stored.proposal.policy_version != self._policy_config.policy_version
+                or stored.proposal.policy_bundle_digest != bundle_digest
+            ):
+                raise StoreError(reasons.POLICY_CHANGED, "policy changed before retry")
+            if (
+                proposal_digest(stored.proposal) != stored.digest
+                or approval.proposal_digest != stored.digest
+                or retry.preflight.proposal_digest != stored.digest
+            ):
+                raise StoreError(reasons.DIGEST_MISMATCH, "proposal digest changed before retry")
+            snapshot = self._fresh_snapshot()
+            if (
+                snapshot.state_fingerprint != approval.state_fingerprint
+                or snapshot.state_fingerprint != retry.preflight.state_fingerprint
+            ):
+                raise StoreError(
+                    reasons.STATE_CHANGED_SINCE_PROPOSAL,
+                    "live state changed before retry claim",
+                )
+            incident = self.get_incident(stored.proposal.incident_id)
+            if incident is None:
+                raise StoreError(reasons.INCIDENT_NOT_FOUND, "incident disappeared before retry")
+            decision = evaluate(
+                self._policy_config,
+                PolicyInput(
+                    proposal_id=stored.proposal.proposal_id,
+                    action_type=stored.proposal.action_type,
+                    arguments=stored.proposal.arguments,
+                    target=stored.proposal.arguments.target,
+                    scenario_id=incident.scenario_id,
+                    current_snapshot=snapshot,
+                    now=now,
+                    proposal_created_at=stored.proposal.created_at,
+                    proposal_expires_at=stored.proposal.expires_at,
+                    environment_id=stored.proposal.environment_id,
+                    incident_status=incident.status,
+                    attempts_so_far=self._attempt_count(stored.proposal.proposal_id),
+                ),
+            )
+            if decision.decision is PolicyDecisionType.DENY:
+                raise StoreError(reasons.POLICY_DENIED, "policy denied before retry")
+            if decision.decision is not PolicyDecisionType.REQUIRE_APPROVAL:
+                raise StoreError(reasons.POLICY_CHANGED, "approval is no longer required")
+            if attempt.attempt_number >= stored.proposal.attempt_limit:
+                raise StoreError(reasons.ATTEMPT_LIMIT_REACHED, "attempt limit is exhausted")
+            if retry.attempt_number != attempt.attempt_number + 1:
+                raise StoreError(reasons.STALE_VERSION, "retry attempt number is stale")
+            self._update_attempt_locked(retry)
+            self._transition_locked(stored, ProposalState.EXECUTING)
+            self._audit(
+                "execution_retry_claimed",
+                retry.attempt_id,
+                {"attempt": retry.attempt_number},
+            )
+            connection.commit()
+            return retry
+        except Exception:
+            connection.rollback()
+            raise
+
+    def finish_attempt(
+        self, attempt: ActionAttempt, target_state: ProposalState
+    ) -> None:
+        """Persist an outcome and its lifecycle transition in one transaction."""
+        connection = self._conn()
+        with connection:
+            self._update_attempt_locked(attempt)
+            row = self._proposal_row(attempt.proposal_id)
+            if row is None:
+                raise StoreError(reasons.PROPOSAL_NOT_FOUND, "proposal disappeared")
+            self._transition_locked(self._stored_proposal(row), target_state)
+            self._audit(
+                "attempt_finished",
+                attempt.attempt_id,
+                {"outcome": attempt.outcome.value, "state": target_state.value},
+            )
+
+    def get_execution_context(self, idempotency_key: str) -> dict[str, JsonValue]:
+        row = self._conn().execute(
+            "SELECT execution_context FROM attempts WHERE idempotency_key = ?",
+            (idempotency_key,),
+        ).fetchone()
+        if row is None:
+            return {}
+        try:
+            value = json.loads(row["execution_context"])
+        except (TypeError, ValueError) as error:
+            raise StoreError(reasons.CORRUPT_ROW, "attempt context is not valid JSON") from error
+        if not isinstance(value, dict):
+            raise StoreError(reasons.CORRUPT_ROW, "attempt context is not an object")
+        return value
+
+    def _insert_attempt_locked(
+        self, attempt: ActionAttempt, execution_context: Mapping[str, JsonValue]
+    ) -> None:
+        payload = canonical_json(attempt.model_dump(mode="json"))
+        try:
+            self._conn().execute(
+                """INSERT INTO attempts (
+                    attempt_id, proposal_id, idempotency_key, attempt_number,
+                    status, before_resource_version, after_resource_version,
+                    outcome, error_class, json, execution_context
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    attempt.attempt_id,
+                    attempt.proposal_id,
+                    attempt.idempotency_key,
+                    attempt.attempt_number,
+                    attempt.outcome.value,
+                    attempt.before_resource_version,
+                    attempt.after_resource_version,
+                    attempt.outcome.value,
+                    attempt.sanitized_error_class,
+                    payload,
+                    canonical_json(execution_context),
+                ),
+            )
+        except sqlite3.IntegrityError as error:
+            if "idempotency_key" in str(error):
+                raise StoreError(
+                    reasons.DUPLICATE_ATTEMPT_KEY,
+                    f"attempt key {attempt.idempotency_key!r} was already used",
+                ) from error
+            raise
+        self._audit(
+            "attempt_recorded",
+            attempt.attempt_id,
+            {"proposal_id": attempt.proposal_id, "outcome": attempt.outcome.value},
+        )
+
+    def _update_attempt_locked(self, attempt: ActionAttempt) -> None:
+        updated = self._conn().execute(
+            """UPDATE attempts SET attempt_number = ?, status = ?,
+                before_resource_version = ?, after_resource_version = ?, outcome = ?,
+                error_class = ?, json = ? WHERE idempotency_key = ?""",
+            (
+                attempt.attempt_number,
+                attempt.outcome.value,
+                attempt.before_resource_version,
+                attempt.after_resource_version,
+                attempt.outcome.value,
+                attempt.sanitized_error_class,
+                canonical_json(attempt.model_dump(mode="json")),
+                attempt.idempotency_key,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise StoreError(reasons.DUPLICATE_ATTEMPT_KEY, "attempt row is missing")
+
+    def _stored_attempt(self, row: sqlite3.Row) -> ActionAttempt:
+        try:
+            return ActionAttempt.model_validate_json(row["json"])
+        except ValueError as error:
+            raise StoreError(reasons.CORRUPT_ROW, "the stored attempt is not valid") from error
+
     def get_attempt_by_key(self, idempotency_key: str) -> ActionAttempt | None:
         row = self._conn().execute(
             "SELECT json FROM attempts WHERE idempotency_key = ?", (idempotency_key,)
@@ -759,6 +1098,15 @@ class Store:
         if row is None:
             return None
         return ActionAttempt.model_validate_json(row["json"])
+
+    def get_latest_attempt_for_incident(self, incident_id: str) -> ActionAttempt | None:
+        row = self._conn().execute(
+            """SELECT attempts.json FROM attempts
+               JOIN proposals ON proposals.proposal_id = attempts.proposal_id
+               WHERE proposals.incident_id = ? ORDER BY attempts.rowid DESC LIMIT 1""",
+            (incident_id,),
+        ).fetchone()
+        return None if row is None else self._stored_attempt(row)
 
     def attempt_count(self, proposal_id: str) -> int:
         return self._attempt_count(proposal_id)

@@ -7,10 +7,15 @@ add codes freely but never rename one.
 from __future__ import annotations
 
 ALREADY_REVOKED = "already_revoked"
+ATTEMPT_LIMIT_REACHED = "attempt_limit_reached"
+APPROVAL_CONSUMED = "approval_consumed"
+APPROVAL_EXPIRED = "approval_expired"
+APPROVAL_REJECTED = "approval_rejected"
 APPROVAL_NOT_FOUND = "approval_not_found"
 CONFLICTING_DECISION = "conflicting_decision"
 CORRUPT_ROW = "corrupt_row"
 DIGEST_MISMATCH = "digest_mismatch"
+IDEMPOTENCY_CONFLICT = "idempotency_conflict"
 DUPLICATE_ATTEMPT_KEY = "duplicate_attempt_key"
 DUPLICATE_INCIDENT = "duplicate_incident"
 DUPLICATE_PROPOSAL = "duplicate_proposal"
@@ -33,6 +38,10 @@ UNKNOWN_PRINCIPAL = "unknown_principal"
 
 __all__ = [
     "ALREADY_REVOKED",
+    "ATTEMPT_LIMIT_REACHED",
+    "APPROVAL_CONSUMED",
+    "APPROVAL_EXPIRED",
+    "APPROVAL_REJECTED",
     "APPROVAL_NOT_FOUND",
     "CONFLICTING_DECISION",
     "CORRUPT_ROW",
@@ -41,6 +50,7 @@ __all__ = [
     "DUPLICATE_INCIDENT",
     "DUPLICATE_PROPOSAL",
     "ILLEGAL_TRANSITION",
+    "IDEMPOTENCY_CONFLICT",
     "INCIDENT_NOT_FOUND",
     "INVALID_ENVIRONMENT",
     "INVALID_REASON",

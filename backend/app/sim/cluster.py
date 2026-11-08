@@ -19,11 +19,13 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
+from threading import RLock
 from typing import Any, Protocol
 
 from app.agent.identity import DEPLOYMENT_NAME, NAMESPACE
 from app.scenarios.health import HealthObservation, MatchState, observed_state
 from app.scenarios.models import ScenarioDefinition
+from app.sim.ports import PreconditionFailed, UnsupportedOperation
 
 DEPLOYMENT = DEPLOYMENT_NAME
 POD_SELECTOR = f"app.kubernetes.io/name={DEPLOYMENT}"
@@ -170,6 +172,7 @@ def require_scope(scenario: ScenarioDefinition) -> None:
 
 class SimCluster:
     def __init__(self) -> None:
+        self._lock = RLock()
         self._state = SimCluster.baseline()
 
     @classmethod
@@ -195,7 +198,8 @@ class SimCluster:
 
     @property
     def state(self) -> SimState:
-        return self._state
+        with self._lock:
+            return self._state
 
     @property
     def source(self) -> SimSource:
@@ -217,59 +221,64 @@ class SimCluster:
         return fingerprint_of(self._state)
 
     def snapshot(self) -> SimSnapshot:
-        state = self._state
-        return SimSnapshot(
-            observation=self.observe(),
-            tick=state.tick,
-            revision=state.revision,
-            resource_version=state.resource_version,
-            readiness_path=state.readiness_path,
-            readiness_port=state.readiness_port,
-            state_fingerprint=fingerprint_of(state),
-        )
+        with self._lock:
+            state = self._state
+            return SimSnapshot(
+                observation=self.observe(),
+                tick=state.tick,
+                revision=state.revision,
+                resource_version=state.resource_version,
+                readiness_path=state.readiness_path,
+                readiness_port=state.readiness_port,
+                state_fingerprint=fingerprint_of(state),
+            )
 
     def _change(self, *, revision_bump: bool = False, **changes: Any) -> None:
-        candidate = replace(self._state, **changes)
-        if candidate == self._state:
-            return
-        bump: dict[str, Any] = {"resource_version": candidate.resource_version + 1}
-        if revision_bump:
-            bump["revision"] = candidate.revision + 1
-        self._state = replace(candidate, **bump)
+        with self._lock:
+            candidate = replace(self._state, **changes)
+            if candidate == self._state:
+                return
+            bump: dict[str, Any] = {"resource_version": candidate.resource_version + 1}
+            if revision_bump:
+                bump["revision"] = candidate.revision + 1
+            self._state = replace(candidate, **bump)
 
     def tick(self, count: int = 1) -> None:
         if count < 0:
             raise SimError("count must not be negative")
-        for _ in range(count):
-            due = self._state.replacement_due_tick
-            now = self._state.tick + 1
-            self._state = replace(self._state, tick=now)
-            if due is not None and now >= due and self._state.desired_replicas > 0:
-                self._change(pod_present=True, replacement_due_tick=None)
+        with self._lock:
+            for _ in range(count):
+                due = self._state.replacement_due_tick
+                now = self._state.tick + 1
+                self._state = replace(self._state, tick=now)
+                if due is not None and now >= due and self._state.desired_replicas > 0:
+                    self._change(pod_present=True, replacement_due_tick=None)
 
     def inject_fault(self, scenario: ScenarioDefinition) -> None:
-        require_scope(scenario)
-        fault = scenario.fault
-        if fault.kind == "scale":
-            if fault.replicas is None:
-                raise SimError("scale fault is missing replicas")
-            self._scale(fault.replicas)
-        elif fault.kind == "readiness":
-            if fault.path is None and fault.port is None:
-                raise SimError("readiness fault is missing path or port")
-            self._set_probe(
-                fault.path if fault.path is not None else self._state.readiness_path,
-                fault.port if fault.port is not None else self._state.readiness_port,
-            )
-        else:
-            if fault.selector != POD_SELECTOR:
-                raise SimError(f"refusing pod selector {fault.selector!r}")
-            self._delete_pod()
+        with self._lock:
+            require_scope(scenario)
+            fault = scenario.fault
+            if fault.kind == "scale":
+                if fault.replicas is None:
+                    raise SimError("scale fault is missing replicas")
+                self._scale(fault.replicas)
+            elif fault.kind == "readiness":
+                if fault.path is None and fault.port is None:
+                    raise SimError("readiness fault is missing path or port")
+                self._set_probe(
+                    fault.path if fault.path is not None else self._state.readiness_path,
+                    fault.port if fault.port is not None else self._state.readiness_port,
+                )
+            else:
+                if fault.selector != POD_SELECTOR:
+                    raise SimError(f"refusing pod selector {fault.selector!r}")
+                self._delete_pod()
 
     def reset(self) -> None:
         """Restore the healthy baseline. Safe to repeat: a second reset changes nothing."""
-        self._change(desired_replicas=1, pod_present=True, replacement_due_tick=None)
-        self._set_probe(HEALTHY_PROBE_PATH, HEALTHY_PROBE_PORT)
+        with self._lock:
+            self._change(desired_replicas=1, pod_present=True, replacement_due_tick=None)
+            self._set_probe(HEALTHY_PROBE_PATH, HEALTHY_PROBE_PORT)
 
     def mutate_state(
         self,
@@ -283,12 +292,41 @@ class SimCluster:
         This is how an approval is made stale during a pause. It is not part of any
         read-only interface.
         """
-        if desired_replicas is not None:
-            self._scale(desired_replicas)
-        if readiness_path is not None or readiness_port is not None:
-            self._set_probe(
-                readiness_path if readiness_path is not None else self._state.readiness_path,
-                readiness_port if readiness_port is not None else self._state.readiness_port,
+        with self._lock:
+            if desired_replicas is not None:
+                self._scale(desired_replicas)
+            if readiness_path is not None or readiness_port is not None:
+                self._set_probe(
+                    readiness_path if readiness_path is not None else self._state.readiness_path,
+                    readiness_port if readiness_port is not None else self._state.readiness_port,
+                )
+
+    def apply_restart(self, expected_resource_version: int) -> None:
+        with self._lock:
+            self._require_resource_version(expected_resource_version)
+            if self._state.desired_replicas == 0:
+                raise SimError("cannot restart a deployment with zero desired replicas")
+            self._change(
+                revision_bump=True,
+                pod_present=False,
+                replacement_due_tick=self._state.tick + REPLACEMENT_TICKS,
+            )
+
+    def apply_scale(self, replicas: int, expected_resource_version: int) -> None:
+        with self._lock:
+            self._require_resource_version(expected_resource_version)
+            self._scale(replicas)
+
+    def apply_rollback(self, revision: str, expected_resource_version: int) -> None:
+        with self._lock:
+            self._require_resource_version(expected_resource_version)
+            raise UnsupportedOperation(f"rollback to revision {revision!r} is not supported")
+
+    def _require_resource_version(self, expected_resource_version: int) -> None:
+        if self._state.resource_version != expected_resource_version:
+            raise PreconditionFailed(
+                f"expected resource version {expected_resource_version}, "
+                f"found {self._state.resource_version}"
             )
 
     def _scale(self, replicas: int) -> None:
