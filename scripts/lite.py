@@ -21,6 +21,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
+from pydantic import JsonValue  # noqa: E402
+
 from app.agent.evidence_view import snapshot_evidence, snapshot_payload  # noqa: E402
 from app.agent.identity import ENVIRONMENT_ID  # noqa: E402
 from app.agent.ids import IdFactory, uuid_id  # noqa: E402
@@ -42,7 +44,6 @@ from app.scenarios.models import ScenarioDefinition  # noqa: E402
 from app.scenarios.registry import load_scenarios  # noqa: E402
 from app.sim.cluster import SimCluster, SimError, SimSnapshot  # noqa: E402
 from app.store import DEFAULT_ENVIRONMENT_ID, Store, StoreError  # noqa: E402
-from pydantic import JsonValue  # noqa: E402
 
 EXIT_OK = 0
 EXIT_USAGE = 2
