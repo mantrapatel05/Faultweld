@@ -45,6 +45,10 @@ jobs:
         run: python -m ruff check --config=../ruff.toml ../scripts/sim.py
       - name: Sim script typecheck
         run: python -m mypy --config-file pyproject.toml ../scripts/sim.py
+      - name: Lite CLI lint
+        run: python -m ruff check --config=../ruff.toml ../scripts/lite.py
+      - name: Lite CLI typecheck
+        run: python -m mypy --config-file pyproject.toml ../scripts/lite.py
       - name: Domain schema tests
         run: python -m unittest discover -s tests -p "test_*.py"
       - name: Frontend API types are generated from OpenAPI

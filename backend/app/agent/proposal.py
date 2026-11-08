@@ -159,6 +159,30 @@ def proposal_digest(proposal: ActionProposal) -> str:
     ).hexdigest()
 
 
+def bind_policy_metadata(
+    proposal: ActionProposal,
+    *,
+    policy_version: str,
+    bundle_digest: str,
+    proposal_ttl_seconds: int,
+    attempt_limit: int,
+) -> ActionProposal:
+    """Bind a typed proposal to trusted policy values at the composition root.
+
+    The investigator stays independent of the policy package. This function accepts only
+    values supplied by trusted application code and replaces the commit 3 placeholders
+    before the proposal is evaluated or persisted.
+    """
+    return proposal.model_copy(
+        update={
+            "policy_version": policy_version,
+            "policy_bundle_digest": bundle_digest,
+            "expires_at": proposal.created_at + timedelta(seconds=proposal_ttl_seconds),
+            "attempt_limit": attempt_limit,
+        }
+    )
+
+
 def build_proposal(
     draft: ModelProposal,
     *,

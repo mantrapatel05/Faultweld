@@ -17,15 +17,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Protocol
 
+from app.agent.identity import DEPLOYMENT_NAME, NAMESPACE
 from app.scenarios.health import HealthObservation, MatchState, observed_state
 from app.scenarios.models import ScenarioDefinition
 
-NAMESPACE = "faultweld-demo"
-DEPLOYMENT = "faultweld-sample"
-POD_SELECTOR = "app.kubernetes.io/name=faultweld-sample"
+DEPLOYMENT = DEPLOYMENT_NAME
+POD_SELECTOR = f"app.kubernetes.io/name={DEPLOYMENT}"
 HEALTHY_PROBE_PATH = "/"
 HEALTHY_PROBE_PORT = "http"
 REPLACEMENT_TICKS = 3
@@ -58,6 +59,70 @@ class SimState:
         if self.desired_replicas > 0 and self.pod_present and self.probe_ok:
             return 1
         return 0
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, object]) -> SimState:
+        """Rebuild a state from persisted JSON, rejecting anything malformed.
+
+        Persistence is a demo convenience, not an authority boundary: the gateway re-reads
+        the cluster before mutating it. It still validates strictly so a corrupt file fails
+        loudly instead of producing a half-valid cluster.
+        """
+        expected = {
+            "desired_replicas",
+            "pod_present",
+            "readiness_path",
+            "readiness_port",
+            "revision",
+            "resource_version",
+            "tick",
+            "replacement_due_tick",
+        }
+        if set(payload) != expected:
+            raise SimError("persisted sim state has an unexpected shape")
+
+        def integer(name: str, *, minimum: int) -> int:
+            value = payload[name]
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                raise SimError(f"persisted sim state has an invalid {name}")
+            return value
+
+        desired_replicas = integer("desired_replicas", minimum=0)
+        if desired_replicas > MAX_REPLICAS:
+            raise SimError(f"persisted desired_replicas must be at most {MAX_REPLICAS}")
+        pod_present = payload["pod_present"]
+        if not isinstance(pod_present, bool):
+            raise SimError("persisted sim state has an invalid pod_present")
+        readiness_path = payload["readiness_path"]
+        if not isinstance(readiness_path, str) or not readiness_path.startswith("/"):
+            raise SimError("persisted sim state has an invalid readiness_path")
+        readiness_port = payload["readiness_port"]
+        if isinstance(readiness_port, bool) or not isinstance(readiness_port, (str, int)):
+            raise SimError("persisted sim state has an invalid readiness_port")
+        if isinstance(readiness_port, int) and not 1 <= readiness_port <= 65535:
+            raise SimError("persisted sim state has an invalid readiness_port")
+        if isinstance(readiness_port, str) and not readiness_port:
+            raise SimError("persisted sim state has an invalid readiness_port")
+        revision = integer("revision", minimum=1)
+        resource_version = integer("resource_version", minimum=1)
+        tick = integer("tick", minimum=0)
+        raw_due = payload["replacement_due_tick"]
+        if raw_due is None:
+            replacement_due_tick = None
+        elif isinstance(raw_due, bool) or not isinstance(raw_due, int) or raw_due < 0:
+            raise SimError("persisted sim state has an invalid replacement_due_tick")
+        else:
+            replacement_due_tick = raw_due
+        return cls(
+            desired_replicas=desired_replicas,
+            pod_present=pod_present,
+            readiness_path=readiness_path,
+            readiness_port=readiness_port,
+            revision=revision,
+            resource_version=resource_version,
+            tick=tick,
+            replacement_due_tick=replacement_due_tick,
+        )
 
 
 @dataclass(frozen=True)
@@ -106,6 +171,14 @@ def require_scope(scenario: ScenarioDefinition) -> None:
 class SimCluster:
     def __init__(self) -> None:
         self._state = SimCluster.baseline()
+
+    @classmethod
+    def from_state(cls, state: SimState | Mapping[str, object]) -> SimCluster:
+        """Rebuild a cluster from a state or its persisted JSON representation."""
+        payload = asdict(state) if isinstance(state, SimState) else dict(state)
+        cluster = cls()
+        cluster._state = SimState.from_mapping(payload)
+        return cluster
 
     @staticmethod
     def baseline() -> SimState:
