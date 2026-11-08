@@ -1,0 +1,73 @@
+{
+  "fixture_id": "policy-or-permission-changed",
+  "version": "1",
+  "description": "A changed policy bundle and a revoked approval each fail closed.",
+  "cases": [
+    {
+      "case_id": "policy-changed-after-approval",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "policy_version_override": "policy-lite-test-change"
+    },
+    {
+      "case_id": "approval-revoked-after-approval",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "revoke_approval_after_approval": true
+    },
+    {
+      "case_id": "approval-expired-after-approval",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "expire_approval_after_approval": true
+    },
+    {
+      "case_id": "approver-role-no-longer-permitted",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "required_approval_roles_override": [
+        "observer"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "fixture_id": "provider-timeout",
+  "version": "1",
+  "description": "The provider times out during diagnosis and the incident escalates without a proposal or write.",
+  "cases": [
+    {
+      "case_id": "provider-timeout",
+      "provider_error": "timeout"
+    }
+  ]
+}

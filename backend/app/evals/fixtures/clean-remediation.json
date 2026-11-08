@@ -1,0 +1,22 @@
+{
+  "fixture_id": "clean-remediation",
+  "version": "1",
+  "description": "A current, approved scale action is executed once and independently verified.",
+  "cases": [
+    {
+      "case_id": "clean-remediation",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,16 @@
 {
-  "healthy-replica-loss": {"expected_outcome": "escalate", "allowed_actions": []},
-  "readiness-regression": {"expected_outcome": "escalate", "allowed_actions": []},
-  "deployment-unavailable": {"expected_outcome": "escalate", "allowed_actions": []}
+  "healthy-replica-loss": {
+    "expected_outcome": "remediate",
+    "allowed_actions": [
+      "scale_deployment"
+    ]
+  },
+  "readiness-regression": {
+    "expected_outcome": "escalate",
+    "allowed_actions": []
+  },
+  "deployment-unavailable": {
+    "expected_outcome": "escalate",
+    "allowed_actions": []
+  }
 }

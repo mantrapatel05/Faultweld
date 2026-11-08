@@ -1,0 +1,36 @@
+{
+  "fixture_id": "ineffective-action",
+  "version": "2",
+  "description": "An ineffective restart and a self-healing outage do not produce false recovery.",
+  "cases": [
+    {
+      "case_id": "ineffective-restart",
+      "scenario_id": "readiness-regression",
+      "model_actions": [
+        {
+          "action_type": "restart_deployment",
+          "parameters": {},
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ]
+    },
+    {
+      "case_id": "deployment-unavailable-self-heals",
+      "scenario_id": "deployment-unavailable",
+      "advance_after_investigation_ticks": 3,
+      "model_actions": [
+        {
+          "action_type": null,
+          "parameters": {},
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "the deployment is already recovering; do not act"
+        }
+      ]
+    }
+  ]
+}

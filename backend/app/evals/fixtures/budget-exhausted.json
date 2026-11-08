@@ -1,0 +1,15 @@
+{
+  "fixture_id": "budget-exhausted",
+  "version": "2",
+  "description": "A zero model-call budget stops investigation before a provider call or mutation.",
+  "cases": [
+    {
+      "case_id": "budget-exhausted",
+      "max_model_calls": 0
+    },
+    {
+      "case_id": "budget-exhausted-tokens",
+      "max_tokens": 1
+    }
+  ]
+}

@@ -9,7 +9,10 @@ from app.sim.cluster import SimCluster, SimSource
 ROOT = Path(__file__).resolve().parents[3]
 APP = ROOT / "backend" / "app"
 ALLOWED_DIRS = {"sim", "gateway"}
-ALLOWED_FILES = {ROOT / "scripts" / "lite.py"}
+ALLOWED_FILES = {
+    ROOT / "scripts" / "lite.py",
+    APP / "evals" / "runner.py",
+}
 WRITE_AUTHORITY = ("ClusterWriter", "SimWriter", "apply_restart", "apply_scale", "apply_rollback")
 
 
@@ -17,7 +20,7 @@ class GatewayAuthorityTests(TestCase):
     def test_write_authority_names_are_confined_to_sim_gateway_and_composition_root(self) -> None:
         violations: list[str] = []
         for path in sorted(APP.rglob("*.py")):
-            if path.parent.name in ALLOWED_DIRS:
+            if path.parent.name in ALLOWED_DIRS or path in ALLOWED_FILES:
                 continue
             source = path.read_text(encoding="utf-8")
             for name in WRITE_AUTHORITY:

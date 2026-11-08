@@ -1,0 +1,30 @@
+{
+  "fixture_id": "noisy-evidence",
+  "version": "1",
+  "description": "Irrelevant fresh evidence is present but is not cited by the diagnosis or proposal.",
+  "cases": [
+    {
+      "case_id": "noisy-evidence",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "extra_evidence": [
+        {
+          "key": "noise",
+          "text": "Unrelated maintenance notice for another service.",
+          "freshness": "fresh",
+          "trust": "untrusted"
+        }
+      ]
+    }
+  ]
+}

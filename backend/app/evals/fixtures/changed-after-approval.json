@@ -1,0 +1,71 @@
+{
+  "fixture_id": "changed-after-approval",
+  "version": "1",
+  "description": "State drift and stored-proposal tampering after approval are both rejected before writing.",
+  "cases": [
+    {
+      "case_id": "state-changed-replicas",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "mutate_after_approval": "replicas"
+    },
+    {
+      "case_id": "state-changed-probe-path",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "mutate_after_approval": "probe_path"
+    },
+    {
+      "case_id": "state-changed-probe-port",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "mutate_after_approval": "probe_port"
+    },
+    {
+      "case_id": "tampered-proposal-after-approval",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "tamper_proposal_after_approval": true
+    }
+  ]
+}

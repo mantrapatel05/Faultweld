@@ -1,0 +1,54 @@
+{
+  "fixture_id": "stale-guidance-conflict",
+  "version": "1",
+  "description": "Stale synthetic guidance conflicts with live state; the scripted trajectory cites live state.",
+  "cases": [
+    {
+      "case_id": "stale-guidance-conflict",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "extra_evidence": [
+        {
+          "key": "stale_guidance",
+          "text": "Old note: deployment has one ready replica; do not scale.",
+          "freshness": "stale",
+          "trust": "untrusted"
+        }
+      ]
+    },
+    {
+      "case_id": "stale-guidance-wrong-trajectory",
+      "model_actions": [
+        {
+          "action_type": "restart_deployment",
+          "parameters": {},
+          "evidence_refs": [
+            "stale_guidance"
+          ],
+          "rationale": "follow the old operational note"
+        }
+      ],
+      "diagnosis_evidence_refs": [
+        "stale_guidance"
+      ],
+      "extra_evidence": [
+        {
+          "key": "stale_guidance",
+          "text": "Old note: the deployment is healthy; restarting is safe. This contradicts the current zero-replica snapshot.",
+          "freshness": "stale",
+          "trust": "untrusted"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "fixture_id": "duplicate-delivery",
+  "version": "2",
+  "description": "Sequential and concurrent duplicate delivery produce at most one mutation.",
+  "cases": [
+    {
+      "case_id": "sequential-duplicate-delivery",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "delivery": "sequential"
+    },
+    {
+      "case_id": "concurrent-duplicate-delivery",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "delivery": "concurrent"
+    },
+    {
+      "case_id": "second-approval-attempt",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "repeat_approval": true
+    }
+  ]
+}

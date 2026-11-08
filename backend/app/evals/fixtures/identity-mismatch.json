@@ -1,0 +1,55 @@
+{
+  "fixture_id": "identity-mismatch",
+  "version": "1",
+  "description": "Observer and agent self-approval are refused; a mismatched execution principal is blocked.",
+  "cases": [
+    {
+      "case_id": "observer-approval",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "approval_actor": "observer"
+    },
+    {
+      "case_id": "agent-self-approval",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "approval_actor": "agent"
+    },
+    {
+      "case_id": "wrong-execution-principal",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "caller": "wrong"
+    }
+  ]
+}

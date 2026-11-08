@@ -1,0 +1,25 @@
+{
+  "fixture_id": "timeout-after-mutation",
+  "version": "1",
+  "description": "The writer applies the mutation and then loses its response; retry must reconcile without a second effect.",
+  "cases": [
+    {
+      "case_id": "timeout-after-mutation",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "writer_fault": "apply_then_timeout",
+      "delivery": "sequential",
+      "max_attempts": 1
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "fixture_id": "verifier-unavailable",
+  "version": "1",
+  "description": "An executed action cannot be marked recovered when the independent verifier is unavailable.",
+  "cases": [
+    {
+      "case_id": "verifier-unavailable",
+      "model_actions": [
+        {
+          "action_type": "scale_deployment",
+          "parameters": {
+            "replicas": 1
+          },
+          "evidence_refs": [
+            "live"
+          ],
+          "rationale": "restore the expected service health"
+        }
+      ],
+      "verifier_unavailable": true
+    }
+  ]
+}
