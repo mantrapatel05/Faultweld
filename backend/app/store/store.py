@@ -184,7 +184,10 @@ class Store:
         self._clock = clock
         self._ids = ids
         self._resolve_principal = resolve_principal or _default_resolve_principal
-        self._connection: sqlite3.Connection | None = sqlite3.connect(str(path))
+        database = str(path)
+        self._connection: sqlite3.Connection | None = sqlite3.connect(
+            database, uri=database.startswith("file:")
+        )
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
         self._connection.execute("PRAGMA busy_timeout = 5000")

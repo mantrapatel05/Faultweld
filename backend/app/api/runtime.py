@@ -93,8 +93,15 @@ class ApiRuntime:
         self.clock = clock
         self.ids = ids
 
-        with Store(self.db_path, policy_config=self.policy_config) as bootstrap:
-            saved_state = bootstrap.load_environment(DEFAULT_ENVIRONMENT_ID)
+        self._memory_anchor: Store | None = None
+        if str(self.db_path).startswith("file:"):
+            # Keep a connection open so request-scoped Store connections share this
+            # in-memory database for the lifetime of the API process.
+            self._memory_anchor = Store(self.db_path, policy_config=self.policy_config)
+            saved_state = self._memory_anchor.load_environment(DEFAULT_ENVIRONMENT_ID)
+        else:
+            with Store(self.db_path, policy_config=self.policy_config) as bootstrap:
+                saved_state = bootstrap.load_environment(DEFAULT_ENVIRONMENT_ID)
         self.cluster = (
             SimCluster.from_state(saved_state) if saved_state is not None else SimCluster()
         )
@@ -108,6 +115,12 @@ class ApiRuntime:
             clock=self.clock,
             ids=self.ids,
         )
+
+    def close(self) -> None:
+        """Release the anchor connection used by a shared in-memory database."""
+        if self._memory_anchor is not None:
+            self._memory_anchor.close()
+            self._memory_anchor = None
 
     def is_ready(self) -> bool:
         try:

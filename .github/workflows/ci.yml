@@ -119,6 +119,8 @@ jobs:
       - name: Run browser smoke suite
         run: >-
           python .agents/skills/webapp-testing/scripts/with_server.py
+          --server "python -m uvicorn app.demo_main:app --app-dir backend --host 127.0.0.1 --port 8000"
+          --port 8000
           --server "npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173"
           --port 5173
           -- python frontend/tests/browser/console_smoke.py

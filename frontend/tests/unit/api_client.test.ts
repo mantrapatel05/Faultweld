@@ -1,103 +1,100 @@
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, getIncident, listIncidents } from "../../src/api/client";
-import { problem } from "./support";
+import {
+  createScenarioRun,
+  decideProposal,
+  executeProposal,
+  getIncident,
+  getProposal,
+  listIncidents
+} from "../../src/api/client";
 
-const BASE_URL = "http://127.0.0.1:8000";
-
-type FetchMock = Mock<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>;
-
-function stubFetchResponse(response: Response): FetchMock {
-  const fetchMock: FetchMock = vi.fn(async (input, init) => {
-    void input;
-    void init;
-    return response;
-  });
-  vi.stubGlobal("fetch", fetchMock);
-  return fetchMock;
-}
-
-function json(body: unknown, status = 200, contentType = "application/json"): Response {
+function response(body: unknown, status = 200, contentType = "application/json"): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": contentType } });
-}
-
-function lastRequest(fetchMock: FetchMock): [string, RequestInit | undefined] {
-  const call = fetchMock.mock.calls.at(-1);
-  if (call === undefined) {
-    throw new Error("fetch was never called");
-  }
-  return [String(call[0]), call[1]];
 }
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("api client", () => {
-  it("requests the incident index with the documented Accept header", async () => {
-    const fetchMock = stubFetchResponse(json({ items: [], next_cursor: null }));
-
-    await expect(listIncidents()).resolves.toEqual({ items: [], next_cursor: null });
-
-    const [url, init] = lastRequest(fetchMock);
-    expect(url).toBe(`${BASE_URL}/api/incidents`);
-    expect((init?.headers as Record<string, string>).Accept).toBe(
-      "application/json, application/problem+json"
+describe("API client", () => {
+  it("encodes list cursors as query parameters and requests JSON", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async (...args) => { void args; return response({ items: [], next_cursor: null }); }
     );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listIncidents({ limit: 10, cursor: "opaque + cursor" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/incidents?limit=10&cursor=opaque+%2B+cursor");
+    expect(new Headers(init.headers).get("Accept")).toContain("application/problem+json");
   });
 
-  it("encodes incident identifiers in detail requests", async () => {
-    const fetchMock = stubFetchResponse(json({}));
+  it("encodes incident and proposal identifiers", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async (...args) => { void args; return response({}); }
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
     await getIncident("inc 1/2");
+    await getProposal("proposal 1/2");
 
-    expect(lastRequest(fetchMock)[0]).toBe(`${BASE_URL}/api/incidents/inc%201%2F2`);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/incidents/inc%201%2F2");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/proposals/proposal%201%2F2");
   });
 
-  it("raises an ApiError carrying the problem document and its status", async () => {
-    const details = problem({ status: 503 });
-    stubFetchResponse(json(details, 503, "application/problem+json"));
+  it("posts scenario scripts and versioned human decisions", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async (...args) => { void args; return response({}); }
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-    const error = await listIncidents().catch((thrown: unknown) => thrown);
+    await createScenarioRun("healthy-replica-loss", { script: "auto" });
+    await decideProposal("proposal-1", { decision: "approve", expected_version: 2 });
 
-    expect(error).toBeInstanceOf(ApiError);
-    const apiError = error as ApiError;
-    expect(apiError.status).toBe(503);
-    expect(apiError.problem).toEqual(details);
-    expect(apiError.message).toBe(details.detail);
+    const scenarioInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const decisionInit = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(scenarioInit.method).toBe("POST");
+    expect(JSON.parse(String(scenarioInit.body))).toEqual({ script: "auto" });
+    expect(JSON.parse(String(decisionInit.body))).toEqual({ decision: "approve", expected_version: 2 });
   });
 
-  it("rejects a problem document that is missing contract fields", async () => {
-    stubFetchResponse(json({ ...problem(), code: undefined }, 500, "application/problem+json"));
+  it("treats HTTP 202 execution-unknown as a successful typed response", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async (...args) => { void args; return response({ reason_code: "execution_unknown" }, 202); }
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-    const error = await listIncidents().catch((thrown: unknown) => thrown);
+    const result = await executeProposal("proposal-1");
 
-    expect(error).toBeInstanceOf(ApiError);
-    const apiError = error as ApiError;
-    expect(apiError.problem).toBeNull();
-    expect(apiError.message).toBe("The API returned HTTP 500.");
+    expect(result.reason_code).toBe("execution_unknown");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST", body: "{}" });
   });
 
-  it("falls back to a status message when the error body is not JSON", async () => {
-    stubFetchResponse(new Response("<html>502</html>", { status: 502 }));
+  it("preserves structured Problem Details for API failures", async () => {
+    const body = {
+      type: "urn:faultweld:problem:conflict",
+      title: "Operation conflict",
+      status: 409,
+      detail: "The proposal version is stale.",
+      instance: "/api/proposals/proposal-1/decision",
+      code: "stale_version"
+    };
+    vi.stubGlobal("fetch", vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async (...args) => { void args; return response(body, 409, "application/problem+json"); }
+    ));
 
-    const error = await listIncidents().catch((thrown: unknown) => thrown);
-
-    expect(error).toBeInstanceOf(ApiError);
-    const apiError = error as ApiError;
-    expect(apiError.problem).toBeNull();
-    expect(apiError.message).toBe("The API returned HTTP 502.");
+    await expect(decideProposal("proposal-1", { decision: "approve", expected_version: 2 }))
+      .rejects.toMatchObject({ status: 409, problem: body, message: body.detail });
   });
 
-  it("never issues a mutating request from the read-only client", async () => {
-    const fetchMock = stubFetchResponse(json({ items: [], next_cursor: null }));
+  it("falls back to a stable message for a non-JSON error response", async () => {
+    vi.stubGlobal("fetch", vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async (...args) => { void args; return new Response("gateway error", { status: 502 }); }
+    ));
 
-    await listIncidents();
-    await getIncident("inc-1").catch(() => undefined);
-
-    expect(fetchMock.mock.calls.length).toBe(2);
-    for (const call of fetchMock.mock.calls) {
-      expect(call[1]?.method ?? "GET").toBe("GET");
-    }
+    await expect(listIncidents()).rejects.toThrow("The API returned HTTP 502.");
   });
 });
