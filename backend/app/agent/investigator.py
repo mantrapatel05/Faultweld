@@ -33,6 +33,7 @@ from app.agent.reasons import (
     BUDGET_EXHAUSTED_TOKENS,
     BUDGET_EXHAUSTED_WALL_CLOCK,
     INSUFFICIENT_EVIDENCE,
+    INVALID_MODEL_OUTPUT,
     NO_ACTION_PROPOSED,
     NO_EVIDENCE,
     provider_error_reason,
@@ -117,6 +118,7 @@ class _Run:
     context: EvidenceContext
     items: tuple[EvidenceItem, ...]
     supplied_evidence_ids: frozenset[str]
+    alert_summary: str | None
     started_at: datetime
     observed_at: datetime
     usage: _Usage
@@ -153,6 +155,7 @@ class Investigator:
         run_id: str,
         snapshot: SimSnapshot | None = None,
         evidence: Sequence[EvidenceItem] = (),
+        alert_summary: str | None = None,
     ) -> InvestigationResult:
         """Run intake -> diagnose -> propose -> done and return the typed outcome."""
         started_at = self._now()
@@ -165,6 +168,7 @@ class Investigator:
             context=context,
             items=tuple(items),
             supplied_evidence_ids=frozenset(item.record.evidence_id for item in items),
+            alert_summary=alert_summary,
             started_at=started_at,
             observed_at=started_at,
             usage=_Usage(),
@@ -201,6 +205,7 @@ class Investigator:
             )
 
     def _request(self, purpose: ModelPurpose, run: _Run) -> ModelRequest:
+        remaining_calls = max(1, self._budgets.max_model_calls - run.usage.model_calls)
         return ModelRequest(
             purpose=purpose,
             incident_id=run.context.incident_id,
@@ -208,14 +213,16 @@ class Investigator:
             evidence=tuple(
                 ModelEvidence(record=item.record, payload=item.payload) for item in run.items
             ),
+            alert_summary=run.alert_summary,
+            max_provider_attempts=remaining_calls,
         )
 
     def _diagnose(self, run: _Run) -> Diagnosis:
         request = self._request(ModelPurpose.DIAGNOSE, run)
         attempts = 0
         while True:
-            response = self._call(request, run)
             try:
+                response = self._call(request, run)
                 return build_diagnosis(
                     response.output,
                     run_id=run.context.run_id,
@@ -226,13 +233,22 @@ class Investigator:
                 if attempts >= self._max_correction_retries:
                     raise _Escalation(error.reason) from error
                 attempts += 1
+                request = request.model_copy(
+                    update={
+                        "correction_hint": (
+                            "The previous response was incomplete. Return every required field "
+                            "in one complete diagnosis JSON object. Use the exact keys and value "
+                            "types shown in the schema; no prose or omitted fields."
+                        )
+                    }
+                )
 
     def _propose(self, run: _Run, snapshot: SimSnapshot) -> ActionProposal | None:
         request = self._request(ModelPurpose.PROPOSE, run)
         attempts = 0
         while True:
-            response = self._call(request, run)
             try:
+                response = self._call(request, run)
                 draft = parse_proposal(response.output)
                 return build_proposal(
                     draft,
@@ -246,17 +262,42 @@ class Investigator:
                 if attempts >= self._max_correction_retries:
                     raise _Escalation(error.reason) from error
                 attempts += 1
+                request = request.model_copy(
+                    update={
+                        "correction_hint": (
+                            "The previous response was incomplete. Return every required field "
+                            "in one complete proposal JSON object. Use the exact keys and value "
+                            "types shown in the schema; no prose or omitted fields."
+                        )
+                    }
+                )
 
     def _call(self, request: ModelRequest, run: _Run) -> ModelResponse:
         reason = self._budget_reason(run)
         if reason is not None:
             raise _Escalation(reason)
-        run.usage.model_calls += 1
         try:
             response = self._provider.complete(request)
         except ModelProviderError as error:
+            run.usage.model_calls += error.attempts
+            run.usage.tokens_used += error.tokens_used
+            if run.usage.model_calls > self._budgets.max_model_calls:
+                raise _Escalation(BUDGET_EXHAUSTED_MODEL_CALLS) from error
+            if run.usage.tokens_used > self._budgets.max_tokens:
+                raise _Escalation(BUDGET_EXHAUSTED_TOKENS) from error
+            if error.code == "invalid_response" and error.failure_stage in {
+                "json_parse",
+                "schema_validation",
+            }:
+                raise AgentOutputError(
+                    INVALID_MODEL_OUTPUT,
+                    "the model response failed local output validation",
+                ) from error
             raise _Escalation(provider_error_reason(error.code)) from error
+        run.usage.model_calls += response.usage.attempts
         run.usage.tokens_used += response.usage.total_tokens
+        if run.usage.model_calls > self._budgets.max_model_calls:
+            raise _Escalation(BUDGET_EXHAUSTED_MODEL_CALLS)
         if run.usage.tokens_used > self._budgets.max_tokens:
             raise _Escalation(BUDGET_EXHAUSTED_TOKENS)
         if self._elapsed(run) > self._budgets.max_wall_clock_seconds:

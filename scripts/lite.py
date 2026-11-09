@@ -12,10 +12,12 @@ identity provider.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,8 +29,13 @@ from app.agent.evidence_view import snapshot_evidence, snapshot_payload  # noqa:
 from app.agent.identity import ENVIRONMENT_ID  # noqa: E402
 from app.agent.ids import IdFactory, uuid_id  # noqa: E402
 from app.agent.investigator import InvestigationStatus, Investigator  # noqa: E402
+from app.agent.llm.client import HttpLlmClient  # noqa: E402
+from app.agent.llm.config import LlmConfig  # noqa: E402
+from app.agent.llm.errors import LlmClientError  # noqa: E402
+from app.agent.llm.provider import LlmProvider  # noqa: E402
+from app.agent.llm.transcript import RecordingProvider, ReplayProvider  # noqa: E402
 from app.agent.proposal import bind_policy_metadata  # noqa: E402
-from app.agent.provider import ScriptedModelProvider, scripted_response  # noqa: E402
+from app.agent.provider import ModelProvider, ScriptedModelProvider, scripted_response  # noqa: E402
 from app.domain.schemas import (  # noqa: E402
     ActionOutcome,
     ActionProposal,
@@ -62,6 +69,80 @@ SCRIPT_CHOICES = ("auto", "scale", "restart", "none")
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _load_local_api_key(env_name: str = "OPENROUTER_API_KEY") -> bool:
+    """Load one selected provider key from the ignored local .env without printing it."""
+    if os.environ.get(env_name):
+        return True
+    env_path = ROOT / ".env"
+    if not env_path.is_file():
+        return False
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith(f"{env_name}="):
+            value = line.partition("=")[2].strip().strip("\"'")
+            if value:
+                os.environ[env_name] = value
+                return True
+    return False
+
+
+def _provider_for_run(
+    provider_name: str,
+    *,
+    model_id: str | None,
+    transcript_dir: Path,
+    backend: str = "openrouter",
+) -> ModelProvider | None:
+    if provider_name == "scripted":
+        return None
+    if provider_name == "replay":
+        replay_model = model_id or (
+            "openai/gpt-oss-120b" if backend == "groq" else "recursive/flint-v1.0:free"
+        )
+        return ReplayProvider(
+            transcript_dir,
+            model_id=replay_model,
+            parameters={"temperature": 0.0, "max_output_tokens": 1024},
+        )
+    if backend == "groq":
+        env_name = "GROQ_API_KEY"
+        default_model = "openai/gpt-oss-120b"
+        base_url = "https://api.groq.com/openai/v1"
+        allowed_hosts = ("api.groq.com",)
+        input_price = Decimal("0.15")
+        output_price = Decimal("0.60")
+    else:
+        env_name = "OPENROUTER_API_KEY"
+        default_model = "recursive/flint-v1.0:free"
+        base_url = "https://openrouter.ai/api/v1"
+        allowed_hosts = ("openrouter.ai",)
+        input_price = Decimal("0")
+        output_price = Decimal("0")
+    if not _load_local_api_key(env_name):
+        raise LlmClientError("auth_failed")
+    selected_model = model_id or default_model
+    config = LlmConfig(
+        provider_name=backend,
+        model_id=selected_model,
+        base_url=base_url,
+        allowed_hosts=allowed_hosts,
+        input_price_per_million_usd=input_price,
+        output_price_per_million_usd=output_price,
+    )
+    client = HttpLlmClient(config, api_key_env=env_name)
+    provider = LlmProvider(config, client)
+    return RecordingProvider(
+        provider,
+        transcript_dir,
+        provider_id=backend,
+        model_id=selected_model,
+        parameters={
+            "temperature": config.temperature,
+            "max_output_tokens": config.max_output_tokens,
+        },
+    )
 
 
 def _target_line(proposal: ActionProposal) -> str:
@@ -193,6 +274,7 @@ def run_scenario(
     policy_config: PolicyConfig | None = None,
     clock: Callable[[], datetime] = _utc_now,
     ids: IdFactory = uuid_id,
+    model_provider: ModelProvider | None = None,
 ) -> int:
     scenarios = load_scenarios()
     if scenario_id not in scenarios:
@@ -217,7 +299,7 @@ def run_scenario(
     snapshot = cluster.snapshot()
     context = EvidenceContext(incident_id=incident_id, run_id=run_id)
     evidence = snapshot_evidence(snapshot, context=context, observed_at=now)
-    provider = _scripted_steps(
+    provider = model_provider or _scripted_steps(
         scenario_id, script, evidence.record.evidence_id, snapshot_payload(snapshot)
     )
     investigator = Investigator(
@@ -226,7 +308,13 @@ def run_scenario(
         ids=ids,
     )
     result = investigator.investigate(
-        incident_id=incident_id, run_id=run_id, snapshot=snapshot
+        incident_id=incident_id,
+        run_id=run_id,
+        snapshot=snapshot,
+        alert_summary=(
+            f"{scenario.alert.summary}. The healthy service target is "
+            f"{scenario.health.healthy_replicas} replica(s)."
+        ),
     )
 
     with Store(db_path, policy_config=config) as store:
@@ -604,6 +692,12 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("scenario_id")
     run_parser.add_argument("--db", default=str(DEFAULT_DB_PATH))
     run_parser.add_argument("--script", choices=SCRIPT_CHOICES, default="auto")
+    run_parser.add_argument(
+        "--provider", choices=("scripted", "llm", "replay"), default="scripted"
+    )
+    run_parser.add_argument("--model")
+    run_parser.add_argument("--backend", choices=("openrouter", "groq"), default="openrouter")
+    run_parser.add_argument("--transcript-dir", type=Path, default=ROOT / "transcripts")
 
     show_parser = commands.add_parser("show", help="show one proposal and its approval")
     show_parser.add_argument("proposal_id")
@@ -639,7 +733,22 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "run":
-        return run_scenario(args.scenario_id, args.db, script=args.script)
+        try:
+            provider = _provider_for_run(
+                args.provider,
+                model_id=args.model,
+                transcript_dir=args.transcript_dir,
+                backend=args.backend,
+            )
+        except LlmClientError as error:
+            print(f"error: provider_error:{error.code}")
+            return EXIT_ESCALATED
+        return run_scenario(
+            args.scenario_id,
+            args.db,
+            script=args.script,
+            model_provider=provider,
+        )
     if args.command == "show":
         return show_proposal(args.proposal_id, args.db)
     if args.command == "approve":

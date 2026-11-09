@@ -12,13 +12,14 @@ ALLOWED_APP_MODULES = frozenset(
         "app.domain.schemas",
         "app.evidence.models",
         "app.evidence.canonical",
+        "app.evidence.redaction",
         "app.sim.cluster",
     }
 )
 ALLOWED_SIM_CLUSTER_NAMES = frozenset({"EvidenceSource", "SimSnapshot"})
-FORBIDDEN_MODULES = frozenset(
-    {"os", "socket", "http", "urllib", "requests", "httpx", "subprocess"}
-)
+FORBIDDEN_MODULES = frozenset({"os", "socket", "http", "urllib", "requests", "httpx", "subprocess"})
+NETWORK_CLIENT = AGENT_DIR / "llm" / "client.py"
+NETWORK_CLIENT_MODULES = frozenset({"os", "socket", "urllib"})
 FORBIDDEN_NAMES = frozenset({"SimCluster", "SimWriter", "ClusterWriter"})
 FORBIDDEN_TEXT = frozenset({"scenarios/expected", "expected_outcome", "allowed_actions"})
 
@@ -27,10 +28,11 @@ def violations(source: str, filename: str = "<memory>") -> list[str]:
     """Return human-readable import/text violations found in one module source."""
     tree = ast.parse(source, filename=filename)
     problems: list[str] = []
+    is_network_client = Path(filename).resolve() == NETWORK_CLIENT.resolve()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                problems.extend(_module_problems(alias.name, ()))
+                problems.extend(_module_problems(alias.name, (), is_network_client))
                 if alias.name in FORBIDDEN_NAMES:
                     problems.append(f"forbidden import name {alias.name}")
         elif isinstance(node, ast.ImportFrom):
@@ -40,7 +42,7 @@ def violations(source: str, filename: str = "<memory>") -> list[str]:
                 if module and not module.startswith("app.agent"):
                     problems.append(f"relative import escapes app.agent: {module}")
                 continue
-            problems.extend(_module_problems(module, names))
+            problems.extend(_module_problems(module, names, is_network_client))
             for name in names:
                 if name in FORBIDDEN_NAMES:
                     problems.append(f"forbidden import name {name}")
@@ -50,10 +52,14 @@ def violations(source: str, filename: str = "<memory>") -> list[str]:
     return problems
 
 
-def _module_problems(module: str, names: tuple[str, ...]) -> list[str]:
+def _module_problems(
+    module: str, names: tuple[str, ...], is_network_client: bool = False
+) -> list[str]:
     problems: list[str] = []
     root = module.split(".", 1)[0]
-    if root in FORBIDDEN_MODULES:
+    if root in FORBIDDEN_MODULES and not (
+        is_network_client and root in NETWORK_CLIENT_MODULES
+    ):
         problems.append(f"forbidden module {module}")
     if module == "app" or module.startswith("app."):
         if not module.startswith("app.agent") and module not in ALLOWED_APP_MODULES:
@@ -67,7 +73,7 @@ def _module_problems(module: str, names: tuple[str, ...]) -> list[str]:
 
 class AgentIsolationTests(TestCase):
     def test_every_agent_module_is_within_the_read_only_import_allow_list(self) -> None:
-        paths = sorted(AGENT_DIR.glob("*.py"))
+        paths = sorted(AGENT_DIR.rglob("*.py"))
         self.assertIn(AGENT_DIR / "investigator.py", paths)
         for path in paths:
             with self.subTest(path=path.name):
@@ -75,6 +81,17 @@ class AgentIsolationTests(TestCase):
                     violations(path.read_text(encoding="utf-8"), str(path)),
                     [],
                 )
+
+    def test_only_the_dedicated_http_client_can_import_network_modules(self) -> None:
+        self.assertEqual(
+            violations("import urllib.request\n", str(NETWORK_CLIENT)), []
+        )
+        self.assertTrue(
+            violations("import urllib.request\n", str(AGENT_DIR / "provider.py"))
+        )
+        self.assertTrue(
+            violations("import httpx\n", str(NETWORK_CLIENT))
+        )
 
     def test_the_scanner_catches_a_write_path_import(self) -> None:
         problems = violations("import subprocess\n")

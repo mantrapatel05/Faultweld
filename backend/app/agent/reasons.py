@@ -19,7 +19,15 @@ INVALID_PARAMETERS = "invalid_parameters"
 NO_ACTION_PROPOSED = "no_action_proposed"
 
 PROVIDER_ERROR_CODES = frozenset(
-    {"timeout", "rate_limited", "unavailable", "invalid_response", "script_exhausted"}
+    {
+        "timeout",
+        "rate_limited",
+        "unavailable",
+        "invalid_response",
+        "script_exhausted",
+        "auth_failed",
+        "cost_limit",
+    }
 )
 
 

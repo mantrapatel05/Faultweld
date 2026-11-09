@@ -19,16 +19,40 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 from app.domain.schemas import Evidence, NonEmptyId
 
 ProviderErrorCode = Literal[
-    "timeout", "rate_limited", "unavailable", "invalid_response", "script_exhausted"
+    "timeout",
+    "rate_limited",
+    "unavailable",
+    "invalid_response",
+    "script_exhausted",
+    "auth_failed",
+    "cost_limit",
+]
+ProviderFailureStage = Literal[
+    "client_response", "json_parse", "schema_validation", "cost_guard"
 ]
 
 
 class ModelProviderError(RuntimeError):
     """A provider failure with a stable, machine-readable code."""
 
-    def __init__(self, code: ProviderErrorCode, message: str) -> None:
+    def __init__(
+        self,
+        code: ProviderErrorCode,
+        message: str,
+        *,
+        attempts: int = 1,
+        tokens_used: int = 0,
+        status_code: int | None = None,
+        failure_stage: ProviderFailureStage | None = None,
+        failure_details: tuple[str, ...] = (),
+    ) -> None:
         super().__init__(f"{code}: {message}")
         self.code: ProviderErrorCode = code
+        self.attempts = attempts
+        self.tokens_used = tokens_used
+        self.status_code = status_code
+        self.failure_stage = failure_stage
+        self.failure_details = failure_details
 
 
 class ModelPurpose(StrEnum):
@@ -52,6 +76,9 @@ class ModelRequest(BaseModel):
     incident_id: NonEmptyId
     run_id: NonEmptyId
     evidence: tuple[ModelEvidence, ...]
+    alert_summary: str | None = Field(default=None, max_length=1000)
+    correction_hint: str | None = Field(default=None, max_length=300)
+    max_provider_attempts: int = Field(default=1, ge=1)
 
     @property
     def evidence_ids(self) -> tuple[str, ...]:
@@ -64,6 +91,9 @@ class ModelUsage(BaseModel):
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     cost_usd: float = Field(default=0.0, ge=0)
+    estimated: bool = False
+    attempts: int = Field(default=1, ge=1)
+    unreported_tokens: int = Field(default=0, ge=0)
 
     @field_validator("cost_usd")
     @classmethod
@@ -74,7 +104,7 @@ class ModelUsage(BaseModel):
 
     @property
     def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
+        return self.input_tokens + self.output_tokens + self.unreported_tokens
 
 
 class ModelResponse(BaseModel):

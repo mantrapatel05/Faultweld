@@ -120,6 +120,38 @@ npm ci --prefix frontend
 
 ## Demo
 
+### Optional OpenRouter provider
+
+The default and CI provider remains scripted. For a manual model-backed proposal, put
+`OPENROUTER_API_KEY` in your ignored local `.env` file (see `.env.example`) or set it in
+your shell, then run:
+
+```powershell
+.\.venv\Scripts\python scripts\llm_smoke.py --backend openrouter
+```
+
+The smoke test uses
+`recursive/flint-v1.0:free` by default, records redacted calls under the
+ignored `transcripts/` directory, and stops after policy classification. It does not approve
+or execute the proposal. You can choose another OpenRouter model with `--model`; replay saved
+calls offline with `scripts/lite.py run healthy-replica-loss --provider replay --transcript-dir transcripts/smoke`.
+OpenRouter routes this model to a third-party provider; its model listing
+says prompts and completions may be retained under that provider's terms. Use synthetic
+project evidence only.
+
+### Optional Groq provider
+
+Groq is also supported for a manual live run. Add `GROQ_API_KEY` to your ignored local
+`.env` file, then run the full diagnosis-to-proposal smoke flow:
+
+```powershell
+.\.venv\Scripts\python scripts\llm_smoke.py --backend groq
+```
+
+This uses `openai/gpt-oss-120b`, which Groq currently lists as supporting JSON Schema output.
+The app still validates every response locally. The live call has a $0.05 per-run cost cap;
+Groq's configured token prices are $0.15/$0.60 per million input/output tokens.
+
 **Watch a transient fault heal (tick-based, deterministic):**
 
 ```powershell
