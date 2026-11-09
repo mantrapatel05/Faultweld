@@ -9,6 +9,7 @@ from pydantic import JsonValue
 
 from app.agent.diagnosis import ModelDiagnosis
 from app.agent.proposal import ModelProposal
+from app.agent.protocol import step_json_schema
 from app.domain.schemas import ActionType
 
 SCHEMA_VERSION = "faultweld-output-2"
@@ -99,6 +100,8 @@ def schema_for(purpose: str) -> dict[str, object]:
         return _diagnosis_schema()
     if purpose == "propose":
         return _proposal_schema()
+    if purpose == "investigate_step":
+        return step_json_schema()
     raise ValueError("unsupported model purpose")
 
 

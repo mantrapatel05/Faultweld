@@ -19,6 +19,7 @@ from app.agent.diagnosis import build_diagnosis
 from app.agent.errors import AgentOutputError
 from app.agent.evidence_view import snapshot_evidence
 from app.agent.ids import IdFactory, uuid_id
+from app.agent.loop import AgentLoop, LoopBudget
 from app.agent.proposal import build_proposal, parse_proposal
 from app.agent.provider import (
     ModelEvidence,
@@ -38,6 +39,7 @@ from app.agent.reasons import (
     NO_EVIDENCE,
     provider_error_reason,
 )
+from app.agent.tools.executor import ToolExecutor, ToolResultError
 from app.domain.schemas import (
     ActionProposal,
     Diagnosis,
@@ -46,7 +48,7 @@ from app.domain.schemas import (
     NonNegativeInt,
 )
 from app.evidence.models import EvidenceContext, EvidenceItem
-from app.sim.cluster import SimSnapshot
+from app.sim.cluster import EvidenceSource, SimSnapshot
 
 WORKFLOW_VERSION = "investigation-lite-1"
 
@@ -64,6 +66,7 @@ class InvestigationBudget(BaseModel):
     max_model_calls: NonNegativeInt = 4
     max_tokens: NonNegativeInt = 8000
     max_wall_clock_seconds: NonNegativeInt = 120
+    max_tool_calls: NonNegativeInt = 6
 
 
 class InvestigationResult(DomainModel):
@@ -113,7 +116,7 @@ class _Escalation(Exception):
         self.diagnosis = diagnosis
 
 
-@dataclass(frozen=True)
+@dataclass
 class _Run:
     context: EvidenceContext
     items: tuple[EvidenceItem, ...]
@@ -139,6 +142,8 @@ class Investigator:
         now: Callable[[], datetime] = _utc_now,
         ids: IdFactory = uuid_id,
         max_correction_retries: int = 1,
+        source: EvidenceSource | None = None,
+        agentic: bool = False,
     ) -> None:
         if max_correction_retries < 0:
             raise ValueError("max_correction_retries must not be negative")
@@ -147,6 +152,10 @@ class Investigator:
         self._now = now
         self._ids = ids
         self._max_correction_retries = max_correction_retries
+        self._source = source
+        self._agentic = agentic
+        if agentic and source is None:
+            raise ValueError("agentic investigation requires a read-only EvidenceSource")
 
     def investigate(
         self,
@@ -178,7 +187,8 @@ class Investigator:
         try:
             if not run.items:
                 raise _Escalation(NO_EVIDENCE)
-            diagnosis = self._diagnose(run)
+            diagnosis = self._diagnose_agentic(run) if self._agentic else self._diagnose(run)
+            evidence_ids = tuple(item.record.evidence_id for item in run.items)
             if not diagnosis.is_sufficient:
                 raise _Escalation(INSUFFICIENT_EVIDENCE, diagnosis)
             if snapshot is None:
@@ -216,6 +226,57 @@ class Investigator:
             alert_summary=run.alert_summary,
             max_provider_attempts=remaining_calls,
         )
+
+    def _diagnose_agentic(self, run: _Run) -> Diagnosis:
+        if self._source is None:
+            raise _Escalation(INSUFFICIENT_EVIDENCE)
+        try:
+            executor = ToolExecutor(
+                self._source,
+                run.context,
+                now=self._now,
+                initial_evidence=run.items,
+            )
+        except ToolResultError as error:
+            raise _Escalation(error.reason) from error
+        loop = AgentLoop(
+            self._provider,
+            executor,
+            budget=LoopBudget(
+                max_model_calls=max(0, self._budgets.max_model_calls - 1),
+                max_tool_calls=self._budgets.max_tool_calls,
+                max_tokens=self._budgets.max_tokens,
+                max_wall_clock_seconds=float(self._budgets.max_wall_clock_seconds),
+            ),
+            now=self._now,
+        )
+        outcome = loop.run(
+            context=run.context,
+            initial_evidence=run.items,
+            alert_summary=run.alert_summary,
+        )
+        run.usage.model_calls += outcome.model_calls
+        run.usage.tokens_used += outcome.tokens_used
+        run.items = outcome.evidence
+        run.supplied_evidence_ids = frozenset(
+            item.record.evidence_id for item in outcome.evidence
+        )
+        if outcome.termination != "final_received" or outcome.diagnosis_output is None:
+            reason = {
+                "model_budget_exhausted": BUDGET_EXHAUSTED_MODEL_CALLS,
+                "token_budget_exhausted": BUDGET_EXHAUSTED_TOKENS,
+                "wall_clock_exhausted": BUDGET_EXHAUSTED_WALL_CLOCK,
+            }.get(outcome.termination, outcome.termination)
+            raise _Escalation(reason)
+        try:
+            return build_diagnosis(
+                outcome.diagnosis_output,
+                run_id=run.context.run_id,
+                evidence_ids=run.supplied_evidence_ids,
+                ids=self._ids,
+            )
+        except AgentOutputError as error:
+            raise _Escalation(error.reason) from error
 
     def _diagnose(self, run: _Run) -> Diagnosis:
         request = self._request(ModelPurpose.DIAGNOSE, run)

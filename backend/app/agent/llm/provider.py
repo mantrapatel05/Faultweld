@@ -20,6 +20,7 @@ from app.agent.llm.pricing import token_cost_usd
 from app.agent.llm.prompts import render_prompt
 from app.agent.llm.schemas import normalize_model_output, schema_for
 from app.agent.proposal import ModelProposal
+from app.agent.protocol import agent_step_adapter
 from app.agent.provider import (
     ModelProviderError,
     ModelRequest,
@@ -134,6 +135,7 @@ class LlmProvider:
                     schema=(
                         {"type": "json_object"}
                         if request.correction_hint is not None
+                        or request.purpose.value == "investigate_step"
                         else schema
                     ),
                     model=self._config.model_id,
@@ -153,19 +155,23 @@ class LlmProvider:
                         failure_stage="json_parse",
                         failure_details=(str(error),),
                     ) from error
-                output = normalize_model_output(request.purpose.value, parsed)
-                output_model = (
-                    ModelDiagnosis
-                    if request.purpose.value == "diagnose"
-                    else ModelProposal
-                )
                 try:
-                    output_model.model_validate(output)
+                    if request.purpose.value == "investigate_step":
+                        agent_step_adapter.validate_python(parsed)
+                        output = parsed
+                    else:
+                        output = normalize_model_output(request.purpose.value, parsed)
+                        output_model = (
+                            ModelDiagnosis
+                            if request.purpose.value == "diagnose"
+                            else ModelProposal
+                        )
+                        output_model.model_validate(output)
                 except ValidationError as error:
                     response_keys = tuple(
                         sorted(
                             key
-                            for key in output
+                            for key in parsed
                             if key.isidentifier() and len(key) <= 32
                         )[:8]
                     )

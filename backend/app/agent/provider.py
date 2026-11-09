@@ -58,6 +58,7 @@ class ModelProviderError(RuntimeError):
 class ModelPurpose(StrEnum):
     DIAGNOSE = "diagnose"
     PROPOSE = "propose"
+    INVESTIGATE_STEP = "investigate_step"
 
 
 class ModelEvidence(BaseModel):

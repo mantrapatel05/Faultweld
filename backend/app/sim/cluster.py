@@ -33,10 +33,21 @@ HEALTHY_PROBE_PATH = "/"
 HEALTHY_PROBE_PORT = "http"
 REPLACEMENT_TICKS = 3
 MAX_REPLICAS = 1
+MAX_RECENT_EVENTS = 50
+MAX_SYNTHETIC_LOG_LINES = 20
 
 
 class SimError(ValueError):
     """The requested change is outside what the simulation allows."""
+
+
+@dataclass(frozen=True)
+class SimEvent:
+    """A bounded, deterministic record of a state change."""
+
+    tick: int
+    kind: str
+    resource_version: int
 
 
 @dataclass(frozen=True)
@@ -138,6 +149,8 @@ class SimSnapshot:
     readiness_path: str
     readiness_port: str | int
     state_fingerprint: str
+    recent_events: tuple[SimEvent, ...]
+    synthetic_log_lines: tuple[str, ...]
 
 
 class EvidenceSource(Protocol):
@@ -174,6 +187,7 @@ class SimCluster:
     def __init__(self) -> None:
         self._lock = RLock()
         self._state = SimCluster.baseline()
+        self._events: list[SimEvent] = []
 
     @classmethod
     def from_state(cls, state: SimState | Mapping[str, object]) -> SimCluster:
@@ -231,6 +245,8 @@ class SimCluster:
                 readiness_path=state.readiness_path,
                 readiness_port=state.readiness_port,
                 state_fingerprint=fingerprint_of(state),
+                recent_events=tuple(self._events[-MAX_RECENT_EVENTS:]),
+                synthetic_log_lines=self._synthetic_logs(state),
             )
 
     def _change(self, *, revision_bump: bool = False, **changes: Any) -> None:
@@ -242,6 +258,38 @@ class SimCluster:
             if revision_bump:
                 bump["revision"] = candidate.revision + 1
             self._state = replace(candidate, **bump)
+            self._events.append(
+                SimEvent(
+                    tick=self._state.tick,
+                    kind=self._event_kind(changes, revision_bump),
+                    resource_version=self._state.resource_version,
+                )
+            )
+            del self._events[:-MAX_RECENT_EVENTS]
+
+    @staticmethod
+    def _event_kind(changes: Mapping[str, object], revision_bump: bool) -> str:
+        if "desired_replicas" in changes:
+            return "replicas_changed"
+        if "readiness_path" in changes or "readiness_port" in changes:
+            return "readiness_changed"
+        if "pod_present" in changes:
+            return "pod_changed"
+        if revision_bump:
+            return "revision_changed"
+        return "deployment_changed"
+
+    @staticmethod
+    def _synthetic_logs(state: SimState) -> tuple[str, ...]:
+        if state.desired_replicas == 0:
+            lines = ("deployment has zero desired replicas",)
+        elif not state.pod_present:
+            lines = ("deployment pod is absent",)
+        elif not state.probe_ok:
+            lines = ("readiness probe is failing",)
+        else:
+            lines = ("deployment pod is ready",)
+        return lines[:MAX_SYNTHETIC_LOG_LINES]
 
     def tick(self, count: int = 1) -> None:
         if count < 0:

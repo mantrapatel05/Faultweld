@@ -173,6 +173,8 @@ def _scripted_steps(
     script: str,
     evidence_id: str,
     snapshot_payload: dict[str, JsonValue],
+    *,
+    mode: str = "single-shot",
 ) -> ScriptedModelProvider:
     action_type, parameters = _action_parameters(scenario_id, script)
     diagnosis: dict[str, JsonValue] = {
@@ -197,9 +199,19 @@ def _scripted_steps(
         "rationale": f"deterministic demonstration trajectory for {scenario_id}",
         "evidence_ids": [evidence_id],
     }
-    return ScriptedModelProvider(
-        [scripted_response(diagnosis), scripted_response(proposal)]
-    )
+    if mode == "agentic":
+        steps: list[dict[str, JsonValue]] = [
+            {
+                "type": "tool_call",
+                "tool": "get_deployment_status",
+                "arguments": {},
+            },
+            {"type": "final", "diagnosis": diagnosis},
+            proposal,
+        ]
+    else:
+        steps = [diagnosis, proposal]
+    return ScriptedModelProvider([scripted_response(step) for step in steps])
 
 
 def _incident(
@@ -275,6 +287,7 @@ def run_scenario(
     clock: Callable[[], datetime] = _utc_now,
     ids: IdFactory = uuid_id,
     model_provider: ModelProvider | None = None,
+    mode: str = "single-shot",
 ) -> int:
     scenarios = load_scenarios()
     if scenario_id not in scenarios:
@@ -282,6 +295,9 @@ def run_scenario(
         return EXIT_USAGE
     if script not in SCRIPT_CHOICES:
         print(f"error: unknown_script: {script}")
+        return EXIT_USAGE
+    if mode not in {"single-shot", "agentic"}:
+        print(f"error: unknown_mode: {mode}")
         return EXIT_USAGE
     config = policy_config or PolicyConfig()
     scenario = scenarios[scenario_id]
@@ -300,12 +316,18 @@ def run_scenario(
     context = EvidenceContext(incident_id=incident_id, run_id=run_id)
     evidence = snapshot_evidence(snapshot, context=context, observed_at=now)
     provider = model_provider or _scripted_steps(
-        scenario_id, script, evidence.record.evidence_id, snapshot_payload(snapshot)
+        scenario_id,
+        script,
+        evidence.record.evidence_id,
+        snapshot_payload(snapshot),
+        mode=mode,
     )
     investigator = Investigator(
         provider,
         now=clock,
         ids=ids,
+        source=cluster.source if mode == "agentic" else None,
+        agentic=mode == "agentic",
     )
     result = investigator.investigate(
         incident_id=incident_id,
@@ -693,6 +715,9 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--db", default=str(DEFAULT_DB_PATH))
     run_parser.add_argument("--script", choices=SCRIPT_CHOICES, default="auto")
     run_parser.add_argument(
+        "--mode", choices=("single-shot", "agentic"), default="agentic"
+    )
+    run_parser.add_argument(
         "--provider", choices=("scripted", "llm", "replay"), default="scripted"
     )
     run_parser.add_argument("--model")
@@ -748,6 +773,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.db,
             script=args.script,
             model_provider=provider,
+            mode=args.mode,
         )
     if args.command == "show":
         return show_proposal(args.proposal_id, args.db)
