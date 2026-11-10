@@ -561,6 +561,16 @@ def execute_proposal(
         store.close()
 
 
+def resume_proposal(
+    proposal_id: str,
+    db_path: str,
+    *,
+    policy_config: PolicyConfig | None = None,
+) -> int:
+    """Resume a paused workflow through the same fail-closed gateway path."""
+    return execute_proposal(proposal_id, db_path, policy_config=policy_config)
+
+
 def verify_incident(
     incident_id: str,
     db_path: str,
@@ -745,6 +755,10 @@ def _build_parser() -> argparse.ArgumentParser:
     execute_parser.add_argument("proposal_id")
     execute_parser.add_argument("--db", default=str(DEFAULT_DB_PATH))
 
+    resume_parser = commands.add_parser("resume", help="resume an approved paused workflow")
+    resume_parser.add_argument("proposal_id")
+    resume_parser.add_argument("--db", default=str(DEFAULT_DB_PATH))
+
     verify_parser = commands.add_parser("verify", help="verify an executed incident")
     verify_parser.add_argument("incident_id")
     verify_parser.add_argument("--db", default=str(DEFAULT_DB_PATH))
@@ -785,6 +799,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return revoke_approval(args.approval_id, args.db)
     if args.command == "execute":
         return execute_proposal(args.proposal_id, args.db)
+    if args.command == "resume":
+        return resume_proposal(args.proposal_id, args.db)
     if args.command == "verify":
         return verify_incident(args.incident_id, args.db)
     if args.command == "demo":
@@ -805,6 +821,7 @@ __all__ = [
     "reject_proposal",
     "revoke_approval",
     "run_scenario",
+    "resume_proposal",
     "show_proposal",
     "verify_incident",
 ]

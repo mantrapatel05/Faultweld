@@ -1,0 +1,11 @@
+"""Stable workflow termination and routing codes."""
+
+NO_EVIDENCE = "no_evidence"
+INVALID_PROPOSAL = "invalid_proposal"
+APPROVAL_REJECTED = "approval_rejected"
+EXECUTION_REFUSED = "execution_refused"
+EXECUTION_UNKNOWN = "execution_unknown"
+RECOVERED = "recovered"
+NOT_RECOVERED = "not_recovered"
+WORKFLOW_ALREADY_STARTED = "workflow_already_started"
+WORKFLOW_NOT_PAUSED = "workflow_not_paused"
