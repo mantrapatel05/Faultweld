@@ -281,7 +281,8 @@ def execute_run(
     cluster = SimCluster()
     cluster.inject_fault(scenario)
     snapshot = cluster.snapshot()
-    run_id, incident_id = ids("run"), ids("incident")
+    run_id = f"run-{case.case_id}-r{repeat_index}"
+    incident_id = f"incident-{case.case_id}-r{repeat_index}"
     context = EvidenceContext(incident_id=incident_id, run_id=run_id)
     base_summary = (
         f"{scenario.alert.summary}. The healthy service target is "

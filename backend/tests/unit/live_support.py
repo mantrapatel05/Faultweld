@@ -21,12 +21,15 @@ class FakeLiveModel:
                  replicas: int = 1) -> None:
         self.calls = 0
         self._step_calls = 0
+        self.run_ids: list[str] = []
         self._cost = cost_usd
         self._action = action
         self._replicas = replicas
 
     def complete(self, request: ModelRequest) -> ModelResponse:
         self.calls += 1
+        if request.run_id not in self.run_ids:
+            self.run_ids.append(request.run_id)
         evidence_id = request.evidence_ids[0]
         diagnosis: dict[str, JsonValue] = {
             "hypotheses": [

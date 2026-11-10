@@ -96,6 +96,13 @@ class CasesAndEstimateTests(TestCase):
         self.assertEqual(estimate.worst_case_cost_usd, worst_case_run_cost(cfg) * estimate.runs)
         self.assertEqual(model.calls, 0)
 
+    def test_repeated_runs_use_distinct_provider_run_ids(self) -> None:
+        model = FakeLiveModel()
+        case = LiveCase("base-healthy-replica-loss", "healthy-replica-loss")
+        execute_run(case, 1, model, config())
+        execute_run(case, 2, model, config())
+        self.assertEqual(len(model.run_ids), 2)
+
     def test_dry_run_cli_needs_no_key_and_calls_nothing(self) -> None:
         completed = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "eval.py"), "run", "--mode", "live",
