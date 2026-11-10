@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
@@ -89,12 +89,14 @@ class WorkflowGraph:
 def build_graph(
     services: WorkflowServices,
     *,
-    checkpointer: BaseCheckpointSaver | None = None,
+    checkpointer: BaseCheckpointSaver[Any] | None = None,
 ) -> WorkflowGraph:
     """Build the fixed topology with no automatic node retry."""
-    builder = StateGraph(WorkflowState)
+    builder: Any = StateGraph(WorkflowState)
 
-    def node(name: str, operation: Callable[[WorkflowState], Mapping[str, object]]):
+    def node(
+        name: str, operation: Callable[[WorkflowState], Mapping[str, object]]
+    ) -> Callable[[WorkflowState], dict[str, object]]:
         def run(state: WorkflowState) -> dict[str, object]:
             return _append(state, name, operation(state))
 
