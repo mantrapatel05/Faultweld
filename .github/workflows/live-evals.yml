@@ -1,0 +1,62 @@
+name: live-evals
+
+# Manual only. This workflow spends real money and needs a key, so it must never run on
+# any automatic trigger. Inputs are bounded and the run aborts if the worst case exceeds the cap.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model id (must be configured for the chosen backend)"
+        required: true
+        default: "recursive/flint-v1.0:free"
+      repeats:
+        description: "Repeats per case"
+        required: true
+        default: "3"
+      max_cost_usd:
+        description: "Hard cost cap in USD"
+        required: true
+        default: "1.00"
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: Live-model evaluation
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
+      - name: Install locked dependencies
+        run: python -m pip install --require-hashes -r backend/requirements.lock
+      - name: Dry run (no provider calls)
+        run: >
+          python scripts/eval.py run --mode live --dry-run
+          --model "${{ inputs.model }}" --repeats "${{ inputs.repeats }}"
+          --max-cost-usd "${{ inputs.max_cost_usd }}"
+      - name: Live run
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: >
+          python scripts/eval.py run --mode live --require-estimate-within-cap
+          --model "${{ inputs.model }}" --repeats "${{ inputs.repeats }}"
+          --max-cost-usd "${{ inputs.max_cost_usd }}" --out reports/live
+      - name: Report
+        run: python scripts/eval.py report --raw reports/live/raw --out reports/live/latest
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-eval-results
+          path: |
+            reports/live/raw
+            reports/live/latest
+            reports/live/transcripts

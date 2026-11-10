@@ -1,0 +1,21 @@
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+.mypy_cache
+.ruff_cache
+.pytest_cache
+node_modules
+frontend
+docs
+reports
+transcripts
+infra
+kubeconfig
+.env
+.env.*
+!.env.example
+# Evaluator-only expectations never ship in the runtime image.
+scenarios/expected
+backend/tests
